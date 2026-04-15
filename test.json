@@ -1,0 +1,9 @@
+{
+  "userRequest": {
+    "user": {"id": "test_user_123"},
+    "utterance": "유튜브 링크 테스트"
+  },
+  "action": {
+    "name": "test_action"
+  }
+}
