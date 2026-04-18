@@ -18,6 +18,7 @@ backend/
 │   ├── models/           # DB 테이블 정의 (Entity)
 │   ├── schemas/          # Pydantic 모델 (DTO: Data Transfer Object)
 │   ├── core/             # 공통 설정 (Config, Security, Consts)
+│   ├── databases/         # DB 연결 설정 (PostgreSQL)
 │   ├── agents/           # AI 흐름 제어 (LangGraph Nodes)
 │   └── main.py           # FastAPI 앱 실행
 ├── migrations/           # Alembic 마이그레이션
