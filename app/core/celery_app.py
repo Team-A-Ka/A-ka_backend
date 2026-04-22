@@ -21,5 +21,8 @@ celery_app.conf.update(
     # task_acks_late=True,
 )
 
-# 생성될 task 모듈들을 autodiscover 등록
-celery_app.autodiscover_tasks(["app.services"], related_name="knowledge_pipeline")
+# 생성될 task 모듈들을 명시적으로 임포트
+celery_app.conf.imports = [
+    "app.services.router_service",
+    "app.services.knowledge_pipeline"
+]

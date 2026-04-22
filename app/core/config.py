@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "aka_db"
+    DATABASE_URL: str = ""
 
     # Redis / Celery
     # 백그라운드 큐 통신을 위한 로컬 Redis 브로커 주소입니다.
