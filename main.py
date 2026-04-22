@@ -7,7 +7,8 @@ from app.routers.api import api_router
 # @shared_task나 @celery_app.task들이 올바른 설정값(Broker 등)을 바라보게 합니다.
 from app.core.celery_app import celery_app
 
-models.Base.metadata.create_all(bind=engine)
+# models.Base.metadata.create_all(bind=engine)
+# alembic 도입했으므로 주석처리함
 
 
 app = FastAPI()
