@@ -1,35 +1,39 @@
 from fastapi import APIRouter, BackgroundTasks
 from app.schemas.kakao import KakaoWebhookRequest, KakaoWebhookResponse, Template, Output, SimpleText
-import asyncio
+
+# 새로 만든 AI 라우터 Celery Task 임포트
+from app.services.router_service import analyze_intent_and_route
 
 router = APIRouter()
 
-# 임시 워커 함수
-async def mock_celery_worker(user_id: str, utterance: str):
-    print(f"\n[Worker]  유저 {user_id}의 데이터 비동기 처리 시작: {utterance}")
-    await asyncio.sleep(3) # 3초 딜레이
-    print(f"[Worker]  유저 {user_id}의 데이터 처리 완료 및 노션 전송 완료!\n")
+def dispatch_to_celery(user_id: str, utterance: str):
+    """Celery 큐에 밀어넣는 작업 자체도 백그라운드에서 처리하여 5초 응답을 완벽히 보장합니다."""
+    try:
+        analyze_intent_and_route.delay(user_id, utterance)
+    except Exception as e:
+        print(f"⚠️ [경고] 워커 큐(Redis) 전송 실패. 백그라운드 작업이 지연됩니다: {e}")
 
-@router.post("/kakao", response_model=KakaoWebhookResponse)
-async def handle_kakao_webhook(
-    request: KakaoWebhookRequest, 
-    background_tasks: BackgroundTasks
-):
+@router.post("/chat/webhook", response_model=KakaoWebhookResponse)
+async def kakao_webhook(request: KakaoWebhookRequest, background_tasks: BackgroundTasks):
+    # 1. userRequest.utterance 값 추출 및 로깅
     user_id = request.userRequest.user.id
     utterance = request.userRequest.utterance
     
-    print(f" [Webhook] 카카오 요청 수신 | Text: {utterance}")
+    print(f"========== [카카오 웹훅 수신] ==========")
+    print(f"User ID: {user_id}")
+    print(f"Utterance: {utterance}")
+    
+    # 2. Celery 백그라운드 워커로 작업 이관을 통지 (비동기 위임)
+    background_tasks.add_task(dispatch_to_celery, user_id, utterance)
 
-    # 백그라운드로 무거운 작업 넘기기
-    background_tasks.add_task(mock_celery_worker, user_id, utterance)
-
-    # 즉시 응답
+    # 3. 즉시 카카오 Response 반환 (5초 타임아웃 완벽 방어)
     return KakaoWebhookResponse(
+        version="2.0",
         template=Template(
             outputs=[
                 Output(
                     simpleText=SimpleText(
-                        text="요청을 접수했습니다! 분석을 시작합니다. 완료되면 알려드릴게요 "
+                        text="서버 연결 성공! 요청하신 내용을 확인했습니다."
                     )
                 )
             ]
