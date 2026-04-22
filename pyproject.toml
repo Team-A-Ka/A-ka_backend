@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "requests>=2.33.1",
     "sqlalchemy>=2.0.49",
+    "youtube-transcript-api>=1.2.4",
 ]
 
 [dependency-groups]
