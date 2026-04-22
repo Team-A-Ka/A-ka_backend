@@ -1,122 +1,73 @@
-from __future__ import annotations
-
-import enum
-import uuid
+from uuid import UUID, uuid4
 from datetime import datetime
-from typing import TYPE_CHECKING, List, Optional
+from typing import Optional, List
+from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy import BigInteger, Column, Text, String
+from enum import Enum
+from .category import Category  
 
-if TYPE_CHECKING:
-    from app.models.category import Category
-    from app.models.user import User
-
-from sqlalchemy import (
-    DateTime,
-    Enum as SQLEnum,
-    Float,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    func,
-    text,
-)
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from database import Base
-
-
-class SourceEnum(str, enum.Enum):
-    FILE = "FILE"
+class SourceType(str, Enum):
     YOUTUBE = "YOUTUBE"
     INSTAGRAM = "INSTAGRAM"
+    FILE = "FILE"
 
-
-class StatusEnum(str, enum.Enum):
+class ProcessStatus(str, Enum):
     PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
-
-class Knowledge(Base):
-    __tablename__ = "knowledge"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
-    category_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("category.id"))
-
-    source_type: Mapped[SourceEnum] = mapped_column(
-        SQLEnum(SourceEnum, name="source_type_enum", native_enum=False, length=32),
-        nullable=False,
-    )
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
-    original_url: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[StatusEnum] = mapped_column(
-        SQLEnum(StatusEnum, name="status_enum", native_enum=False, length=32),
-        nullable=False,
-        server_default=StatusEnum.PENDING.value,
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    hit_count: Mapped[int] = mapped_column(Integer, server_default=text("1"))
-
-    user: Mapped["User"] = relationship("User", back_populates="knowledges")
-    category: Mapped["Category"] = relationship("Category", back_populates="knowledges")
-    chunks: Mapped[List["KnowledgeChunk"]] = relationship(
-        "KnowledgeChunk",
-        back_populates="knowledge",
-        cascade="all, delete-orphan",
-    )
-    youtube_metadata: Mapped[Optional["YoutubeMetadata"]] = relationship(
-        "YoutubeMetadata",
-        back_populates="knowledge",
-        uselist=False,
-        cascade="all, delete-orphan",
+class Knowledge(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: int = Field(sa_column=Column(BigInteger, index=True))
+    category_id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, index=True))
+    source_type: SourceType
+    title: str = Field(max_length=255)
+    original_url: str = Field(max_length=255)
+    status: ProcessStatus = Field(default=ProcessStatus.PENDING)
+    summary: Optional[str] = Field(default=None, sa_column=Column(Text))
+    hit_count: int = Field(default=1)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow}
     )
 
 
-class YoutubeMetadata(Base):
+    category: Optional["Category"] = Relationship(back_populates="knowledges")
+    youtube_metadata: Optional["YoutubeMetadata"] = Relationship(back_populates="knowledge")
+    chunks: List["YoutubeKnowledgeChunk"] = Relationship(back_populates="knowledge")
+
+
+class YoutubeMetadata(SQLModel, table=True):
     __tablename__ = "youtube_metadata"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    knowledge_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("knowledge.id"), unique=True
-    )
-
-    video_id: Mapped[str] = mapped_column(String(50))
-    channel_name: Mapped[str] = mapped_column(String(100))
-    duration: Mapped[int] = mapped_column(Integer)
-    thumbnail_url: Mapped[str] = mapped_column(Text)
-
-    knowledge: Mapped["Knowledge"] = relationship(
-        "Knowledge", back_populates="youtube_metadata"
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    knowledge_id: UUID = Field(foreign_key="knowledge.id", unique=True, index=True)
+    video_id: str = Field(max_length=50)
+    video_title: str = Field(max_length=255)
+    channel_name: str = Field(max_length=50)
+    duration: int = Field(sa_column=Column(BigInteger)) 
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow}
     )
 
+    knowledge: Optional[Knowledge] = Relationship(back_populates="youtube_metadata")
 
-class KnowledgeChunk(Base):
-    __tablename__ = "knowledge_chunks"
+class YoutubeKnowledgeChunk(SQLModel, table=True):
+    __tablename__ = "knowledge_chunk"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    knowledge_id: UUID = Field(foreign_key="knowledge.id", index=True)
+    content: str = Field(sa_column=Column(Text))
+    summary_detail: Optional[str] = Field(default=None, sa_column=Column(Text))
+    start_time: int = Field(sa_column=Column(BigInteger)) 
+    chunk_order: int = Field()
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow}
     )
-    knowledge_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("knowledge.id"))
 
-    content: Mapped[str] = mapped_column(Text)
-    start_timestamp: Mapped[float] = mapped_column(Float)
-    chunk_order: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-    summary_detail: Mapped[str] = mapped_column(Text)
-
-    knowledge: Mapped["Knowledge"] = relationship(
-        "Knowledge", back_populates="chunks"
-    )
+    knowledge: Optional[Knowledge] = Relationship(back_populates="chunks")

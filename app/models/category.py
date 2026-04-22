@@ -1,26 +1,21 @@
-from __future__ import annotations
+from datetime import datetime
+from typing import Optional, List
+from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy import BigInteger, Column
+from .knowledge import Knowledge
 
-import uuid
-from typing import TYPE_CHECKING, List
+class Category(SQLModel, table=True):
+    id: Optional[int] = Field(
+        default=None, 
+        primary_key=True, 
+        sa_column=Column(BigInteger, primary_key=True, autoincrement=True)
+    ) # DB가 ID를 자동 생성하도록 허용하기 위해 Optional 설정
 
-if TYPE_CHECKING:
-    from app.models.knowledge import Knowledge
-
-from sqlalchemy import String
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from database import Base
-
-
-class Category(Base):
-    __tablename__ = "category"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    name: str = Field(max_length=50, unique=True, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column_kwargs={"onupdate": datetime.utcnow}
     )
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    knowledges: Mapped[List["Knowledge"]] = relationship(
-        "Knowledge", back_populates="category"
-    )
+    knowledges: List["Knowledge"] = Relationship(back_populates="category")
