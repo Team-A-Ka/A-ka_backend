@@ -1,21 +1,20 @@
 from datetime import datetime
-from typing import Optional, List
-from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import BigInteger, Column
-from .knowledge import Knowledge
+from typing import List, TYPE_CHECKING
+from sqlalchemy import String, BigInteger, TIMESTAMP, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from database import Base
 
-class Category(SQLModel, table=True):
-    id: Optional[int] = Field(
-        default=None, 
-        primary_key=True, 
-        sa_column=Column(BigInteger, primary_key=True, autoincrement=True)
-    ) # DB가 ID를 자동 생성하도록 허용하기 위해 Optional 설정
+if TYPE_CHECKING:
+    from .knowledge import Knowledge
 
-    name: str = Field(max_length=50, unique=True, index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column_kwargs={"onupdate": datetime.utcnow}
+class Category(Base):
+    __tablename__ = "category"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP, server_default=func.now(), onupdate=func.now()
     )
 
-    knowledges: List["Knowledge"] = Relationship(back_populates="category")
+    knowledges: Mapped[List["Knowledge"]] = relationship("Knowledge", back_populates="category")
