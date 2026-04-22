@@ -1,0 +1,70 @@
+enum source_enum {
+  FILE
+  YOUTUBE
+  INSTAGRAM
+}
+
+enum status_enum {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+Table category {
+  id bigint [pk, increment] // uuid 대신 자동 증가 정수형 사용
+  name varchar(50)
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+}
+
+Table user {
+  id bigint [pk, increment] // uuid 대신 자동 증가 정수형 사용
+  user_name varchar(50) 
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+}
+
+Table user_category {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id integer [ref: > user.id]
+  category_id integer [ref: > category.id]
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+}
+
+Table knowledge {
+  id uuid [pk, default: `gen_random_uuid()`]
+  user_id bigint [ref: > user.id]
+  category_id bigint [ref: > category.id]
+  source_type source_enum 
+  title varchar(255)
+  original_url varchar(255) 
+  status status_enum [default: 'PENDING']
+  summary varchar(255) 
+  hit_count integer [default: 1]
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+}
+
+Table youtube_metadata {
+  id uuid [pk, default: `gen_random_uuid()`]
+  knowledge_id uuid [unique, ref: - knowledge.id]
+  video_id varchar(50) 
+  video_title varchar(255)
+  channel_name varchar(50)
+  duration bigint [note: '영상 길이']
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+}
+
+Table knowledge_chunk {
+  id uuid [pk, default: `gen_random_uuid()`, note: '이 ID를 Vector DB의 ID로 사용, 1:1 매핑']
+  knowledge_id uuid [ref: > knowledge.id]
+  content text [note: '청크 내용']
+  summary_detail text  [note: '청크별 요약 내용']
+  start_time bigint [note: '유튜브 자막 시작 시간 (milliseconds)']
+  chunk_order integer // 청크 오더가 깨졌을 때를 대비해야함.
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+}

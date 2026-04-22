@@ -1,18 +1,20 @@
-"""
-[Category 모델 모듈]
-카테고리 정보를 담는 데이터베이스 스키마입니다.
-"""
-import uuid
-from sqlalchemy import Column, String, text
-from sqlalchemy.dialects.postgresql import UUID
-from app.models.base import Base
+from datetime import datetime
+from typing import List, TYPE_CHECKING
+from sqlalchemy import String, BigInteger, TIMESTAMP, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from database import Base
+
+if TYPE_CHECKING:
+    from .knowledge import Knowledge
 
 class Category(Base):
-    """
-    사용자가 조회/관리하는 주제나 카테고리를 저장하는 모델(테이블)입니다.
-    """
     __tablename__ = "category"
 
-    # 서버 단에서 uuid를 자동 생성하도록 text("gen_random_uuid()")를 기본값으로 위임합니다.
-    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
-    name = Column(String(100), nullable=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP, server_default=func.now(), onupdate=func.now()
+    )
+
+    knowledges: Mapped[List["Knowledge"]] = relationship("Knowledge", back_populates="category")
