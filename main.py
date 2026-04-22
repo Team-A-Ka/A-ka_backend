@@ -3,7 +3,8 @@ from database import engine
 from app import models
 from app.routers.api import api_router
 
-models.Base.metadata.create_all(bind=engine)
+# models.Base.metadata.create_all(bind=engine)
+# alembic 도입했으므로 주석처리함
 
 
 app = FastAPI()
