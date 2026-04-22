@@ -1,26 +1,20 @@
-from __future__ import annotations
-
-import uuid
-from typing import TYPE_CHECKING, List
-
-if TYPE_CHECKING:
-    from app.models.knowledge import Knowledge
-
-from sqlalchemy import String
-from sqlalchemy.dialects.postgresql import UUID
+from datetime import datetime
+from typing import List, TYPE_CHECKING
+from sqlalchemy import String, BigInteger, TIMESTAMP, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-
 from database import Base
 
+if TYPE_CHECKING:
+    from .knowledge import Knowledge
 
 class Category(Base):
     __tablename__ = "category"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP, server_default=func.now(), onupdate=func.now()
     )
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    knowledges: Mapped[List["Knowledge"]] = relationship(
-        "Knowledge", back_populates="category"
-    )
+    knowledges: Mapped[List["Knowledge"]] = relationship("Knowledge", back_populates="category")
