@@ -19,8 +19,11 @@ youtube_service = YouTubeService()
 
 
 @router.get("/transcript")
-def get_transcript(video_id: str = Query(...), language: str = Query("ko")):
-    return youtube_service.get_transcript(video_id, language)
+def get_transcript(url: str):
+    video_id = youtube_service.extract_youtube_video_id(url)
+    if not video_id:
+        raise HTTPException(status_code=400, detail="Invalid Youtube URL")
+    return youtube_service.get_transcript(video_id)
 
 
 @router.post("/transcript/chunk", response_model=list[TranscriptChunkResponse])
@@ -29,7 +32,7 @@ def chunk_transcript(body: TranscriptChunkRequest) -> list[dict]:
     raw = youtube_service.get_transcript(body.video_id)
     if isinstance(raw, str):
         raise HTTPException(status_code=400, detail=raw)
-    segs = refine_transcript_segments(raw) # 정제
+    segs = refine_transcript_segments(raw)  # 정제
     if not segs:
         return []
     # 시간 기반
@@ -45,3 +48,21 @@ def chunk_transcript(body: TranscriptChunkRequest) -> list[dict]:
         body.semantic_min_paragraph_chars,
         body.semantic_min_chunk_chars,
     )
+
+
+@router.get("/metadata")
+def get_metadata_from_url(url: str):
+    video_id = youtube_service.extract_youtube_video_id(url)
+    if not video_id:
+        raise HTTPException(status_code=400, detail="Invalid Youtube URL")
+
+    metadata = youtube_service.get_metadata(video_id)
+    return metadata
+
+
+@router.get("/stt_test")
+def stt_test(url: str):
+    video_id = youtube_service.extract_youtube_video_id(url)
+    if not video_id:
+        raise HTTPException(status_code=400)
+    return youtube_service._run_stt_process(video_id)
