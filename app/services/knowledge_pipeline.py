@@ -24,7 +24,7 @@ def run_async(coro):
 
 # 더미 비동기 DB 작업 시뮬레이션
 async def dummy_async_db_operation(task_name: str, video_id: str, delay: int = 1):
-    from app.core.database import async_session_maker
+    from database import async_session_maker
     
     async with async_session_maker() as session:
         # 실제 환경: session.execute(select(...))

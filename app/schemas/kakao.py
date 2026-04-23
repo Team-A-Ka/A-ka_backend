@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
 
 # --- Input (카카오에서 들어오는 요청 규격) ---
@@ -6,8 +6,9 @@ class KakaoUser(BaseModel):
     id: str
 
 class KakaoUserRequest(BaseModel):
+    model_config = {"populate_by_name": True}
     user: KakaoUser
-    utterance: str  # 유저가 카카오톡에 입력한 텍스트
+    user_message: str = Field(alias="utterance")  # 카카오 JSON의 'utterance' 키를 내부에서는 'user_message'로 사용
 
 class KakaoAction(BaseModel):
     name: str
