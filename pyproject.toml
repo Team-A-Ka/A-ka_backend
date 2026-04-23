@@ -14,6 +14,7 @@ dependencies = [
     "ffmpeg>=1.4",
     "ffprobe>=0.5",
     "isodate>=0.7.2",
+    "langgraph>=1.1.9",
     "openai>=2.31.0",
     "openai-whisper>=20250625",
     "psycopg2-binary>=2.9.11",
