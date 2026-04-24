@@ -21,9 +21,12 @@ from celery.utils.log import get_task_logger
 from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
 from app.core.config import settings
+from app.schemas.graph_state import IntelligenceState, VideoOverview
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
+from app.repositories.knowledge import KnowledgeRepository
+from database import async_session_maker
 
 logger = get_task_logger(__name__)
 
