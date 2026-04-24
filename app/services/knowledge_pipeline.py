@@ -23,8 +23,7 @@ from app.schemas.graph_state import IntelligenceState, VideoOverview
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
-from app.repositories.knowledge import KnowledgeRepository
-from database import async_session_maker
+# 더미 DB 작업용 헬퍼 (실제 연동 전까지 사용)
 
 logger = get_task_logger(__name__)
 
@@ -46,34 +45,13 @@ def run_async(coro):
     return asyncio.run(coro)
 
 
-# ==========================================
-# Repository 호출 래퍼 (async 세션 자동 관리)
-#   - 파이프라인 각 Step은 sync Celery 태스크이므로 run_async로 감싼다.
-#   - Repository 메서드는 모두 async. 세션은 호출 단위로 열고 닫는다.
-# ==========================================
-async def _repo_create_pipeline_record(payload: dict):
-    async with async_session_maker() as session:
-        repo = KnowledgeRepository(session)
-        return await repo.create_pipeline_record(payload)
-
-
-async def _repo_update_pipeline_result(data: dict):
-    async with async_session_maker() as session:
-        repo = KnowledgeRepository(session)
-        return await repo.update_pipeline_result(data)
-
-
-async def _repo_mark_completed(knowledge_id):
-    async with async_session_maker() as session:
-        repo = KnowledgeRepository(session)
-        return await repo.mark_completed(knowledge_id)
-
-
-async def _repo_mark_failed_by_video(video_id: str, kakao_user_id: str):
-    async with async_session_maker() as session:
-        repo = KnowledgeRepository(session)
-        return await repo.mark_failed_by_video(video_id=video_id, kakao_user_id=kakao_user_id)
-
+# --- 더미 DB 작업 (실제 DB 로직으로 교체 예정) ---
+async def dummy_async_db_operation(task_name: str, video_id: str, delay: int = 1):
+    logger.info(f"[{task_name}] DB 작업 시뮬레이션 (video_id: {video_id})")
+    await asyncio.sleep(delay)
+    logger.info(f"[{task_name}] DB 작업 완료")
+    import uuid
+    return uuid.uuid4() if task_name == "create_pipeline_record" else {"status": "success", "task_name": task_name}
 
 # IntelligenceState, VideoOverview는 app/schemas/graph_state.py에서 import
 
@@ -300,26 +278,8 @@ def collect_and_chunk(self, video_id: str, kakao_user_id: str):
                 }
             )
 
-        # ── DB 최초 레코드 생성 (Repository 호출) ──
-        #   유리님이 구현할 create_pipeline_record(payload) → knowledge_id(UUID) 반환
-        #   책임 범위:
-        #     1) user_channel_identity(provider='kakao', provider_user_id=kakao_user_id) 조회/생성
-        #     2) Knowledge INSERT  (status=PROCESSING, title=video_title, original_url, user_id, source_type=YOUTUBE)
-        #     3) YoutubeMetadata INSERT
-        #     4) knowledge_chunk bulk INSERT (summary_detail=NULL, embedding=NULL)
         original_url = f"https://www.youtube.com/watch?v={video_id}"
-        create_payload = {
-            "kakao_user_id": kakao_user_id,
-            "video_id": video_id,
-            "original_url": original_url,
-            "metadata": {
-                "video_title": metadata.get("video_title", "Unknown"),
-                "channel_name": metadata.get("channel_name", "Unknown"),
-                "duration": metadata.get("duration", 0),
-            },
-            "chunks": final_chunks,
-        }
-        knowledge_id = run_async(_repo_create_pipeline_record(create_payload))
+        knowledge_id = run_async(dummy_async_db_operation("create_pipeline_record", video_id, 1))
         logger.info(
             f"[Step 1] 레코드 생성 완료 (knowledge_id: {knowledge_id}) — 청크 {len(final_chunks)}개 INSERT"
         )
@@ -329,7 +289,7 @@ def collect_and_chunk(self, video_id: str, kakao_user_id: str):
             "video_id": video_id,
             "knowledge_id": str(knowledge_id) if knowledge_id else None,
             "original_url": original_url,
-            "metadata": create_payload["metadata"],
+            "metadata": metadata,
             "chunks": final_chunks,
         }
     except Exception as exc:
@@ -369,35 +329,7 @@ def run_intelligence_graph_task(self, data: dict):
     summarized_chunks = result.get("summarized_chunks", [])
     embeddings = result.get("embeddings") or []
 
-    # ── Repository 호출 전 key adapter (파이프라인 키 → DB 컬럼 키) ──
-    #   - full_summary            → overview.summary
-    #   - chunks[].summary        → chunks[].summary_detail
-    #   - category (문자열)        → overview.category_name  (A안: Repository가 upsert 후 FK 세팅)
-    #   - 하드코딩 추가 필드       → source_type = "YOUTUBE", original_url
-    repo_chunks = []
-    for idx, chunk in enumerate(summarized_chunks):
-        repo_chunks.append({
-            "chunk_order": chunk["chunk_order"],
-            "content": chunk["content"],
-            "start_time": chunk["start_time"],
-            "summary_detail": chunk["summary"],
-            "embedding": embeddings[idx] if idx < len(embeddings) else None,
-        })
-
-    repo_payload = {
-        "video_id": video_id,
-        "metadata": metadata,
-        "overview": {
-            "title": result["title"],
-            "summary": result["full_summary"],
-            "category_name": result["category"],
-            "source_type": "YOUTUBE",
-            "original_url": original_url,
-        },
-        "chunks": repo_chunks,
-    }
-
-    run_async(_repo_update_pipeline_result(repo_payload))
+    run_async(dummy_async_db_operation("update_pipeline_result", video_id, 1))
 
     logger.info(
         f"[Step 2: LangGraph] 완료 — knowledge_id: {knowledge_id}, 제목: {result['title']}, "
@@ -432,7 +364,7 @@ def update_pipeline_status(self, data: dict):
 
     # ── Knowledge.status → COMPLETED ──
     if knowledge_id:
-        run_async(_repo_mark_completed(knowledge_id))
+        run_async(dummy_async_db_operation("mark_completed", video_id, 1))
     else:
         logger.warning("[Step 3] knowledge_id 없음 — mark_completed 스킵 (Step 1 이슈 가능성)")
 
@@ -457,7 +389,7 @@ def handle_pipeline_failure(self, task_id, video_id: str, kakao_user_id: str):
         f"(video_id: {video_id}, kakao_user_id: {kakao_user_id}, task: {task_id})"
     )
     try:
-        run_async(_repo_mark_failed_by_video(video_id=video_id, kakao_user_id=kakao_user_id))
+        run_async(dummy_async_db_operation("mark_failed", video_id, 1))
     except Exception as e:
         # 상태 업데이트마저 실패해도 Celery 에러 핸들러는 계속 진행되도록 흡수
         logger.error(f"[Error] FAILED 상태 업데이트 실패: {e}")
