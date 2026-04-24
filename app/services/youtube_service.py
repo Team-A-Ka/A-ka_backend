@@ -111,12 +111,96 @@ class YouTubeService:
                             "text": text.strip(),
                         }
                     )
+            if lines:
+                return lines
 
-            return lines
+            return self._run_stt_process(video_id)
 
         except Exception as e:
             return f"Error fetching transcript: {e}"
 
-    def _run_stt_process(self, video_id: str):
-        # STT 로직 구현부
-        pass
+    ###### STT 구현 관련 함수  ######
+    @property
+    def whisper_model(self):
+        if self._whisper_model is None:
+            self._whisper_model = whisper.load_model(self.whisper_model_name)
+        return self._whisper_model
+
+    def _run_stt_process(self, video_id: str, language: str = "ko"):
+        """
+        1. 유튜브 오디오 다운로드
+        2. Whisper로 전사
+        3. start_time / text 형식으로 반환
+        """
+        audio_path = None
+
+        try:
+            audio_path = self._download_youtube_audio(video_id)
+
+            result = self.whisper_model.transcribe(
+                audio=audio_path,
+                language=language,  # 한국어면 "ko"
+                task="transcribe",  # 번역이 아니라 원문 전사
+                verbose=False,
+            )
+
+            lines = []
+            for seg in result.get("segments", []):
+                text = seg.get("text", "").strip()
+                start = seg.get("start", 0.0)
+
+                if text:
+                    lines.append(
+                        {
+                            "start_time": int(float(start) * 1000),
+                            "text": text,
+                        }
+                    )
+
+            return lines
+
+        except Exception as e:
+            return f"Error running Whisper STT: {e}"
+
+        finally:
+            if audio_path and os.path.exists(audio_path):
+                try:
+                    os.remove(audio_path)
+                except Exception:
+                    pass
+
+    def _download_youtube_audio(self, video_id: str) -> str:
+        """
+        yt-dlp로 유튜브 오디오만 내려받아 wav 파일 경로 반환
+        ffmpeg 설치 필요
+        """
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
+        temp_dir = tempfile.mkdtemp(prefix="yt_audio_")
+        output_template = str(Path(temp_dir) / "%(id)s.%(ext)s")
+
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": output_template,
+            "quiet": True,
+            "noplaylist": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "wav",
+                    "preferredquality": "192",
+                }
+            ],
+        }
+
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            video_id = info["id"]
+
+        wav_path = Path(temp_dir) / f"{video_id}.wav"
+        if not wav_path.exists():
+            raise FileNotFoundError(f"Audio file not found: {wav_path}")
+
+        return str(wav_path)
+
+    #################################
