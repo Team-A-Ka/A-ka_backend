@@ -23,7 +23,7 @@ from langgraph.graph import StateGraph, START, END
 from app.core.config import settings
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
-from app.services.youtube_service import YouTubeServices
+from app.services.youtube_service import YouTubeService
 
 logger = get_task_logger(__name__)
 
