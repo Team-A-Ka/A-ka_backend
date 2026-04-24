@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from app.schemas.transcript_chunk import (
     ChunkStrategy,
@@ -26,8 +26,23 @@ def get_transcript(url: str):
     return youtube_service.get_transcript(video_id)
 
 
+_CHUNK_REQUEST_EXAMPLE = {
+    "video_id": "MKV6DTVmxwE",
+    "language": "ko",
+    "time_window_ms": 30_000,
+    "max_chars": 500,
+    "overlap_chars": 0,
+    "semantic_threshold": 0.35,
+    "semantic_min_paragraph_chars": 150,
+    "semantic_min_chunk_chars": 0,
+    "strategy": "semantic",
+}
+
+
 @router.post("/transcript/chunk", response_model=list[TranscriptChunkResponse])
-def chunk_transcript(body: TranscriptChunkRequest) -> list[dict]:
+def chunk_transcript(
+    body: TranscriptChunkRequest = Body(..., example=_CHUNK_REQUEST_EXAMPLE),
+) -> list[dict]:
     """``get_transcript``와 동일하게 자막을 가져온 뒤 정제하고 ``strategy``에 맞게 청킹한다."""
     raw = youtube_service.get_transcript(body.video_id)
     if isinstance(raw, str):
