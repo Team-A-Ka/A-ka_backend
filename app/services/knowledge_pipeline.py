@@ -12,6 +12,7 @@ Step 2 내부 LangGraph 흐름:
 
 진입점: run_core_pipeline_task(video_id) — router_service.py에서 호출됨
 """
+
 import asyncio
 from typing import TypedDict
 from pydantic import BaseModel, Field
@@ -20,6 +21,9 @@ from celery.utils.log import get_task_logger
 from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
 from app.core.config import settings
+from app.services.transcript_chunking import chunk_by_time
+from app.services.transcript_refine import refine_transcript_segments
+from app.services.youtube_service import YouTubeService
 
 logger = get_task_logger(__name__)
 
@@ -53,13 +57,14 @@ async def dummy_async_db_operation(task_name: str, video_id: str, delay: int = 1
 # ==========================================
 class IntelligenceState(TypedDict):
     """LangGraph 노드 간 공유되는 상태"""
+
     video_id: str
-    chunks: list              # Step 1에서 넘어온 청크 리스트
-    summarized_chunks: list   # 청크별 요약 결과
-    embeddings: list          # 벡터화 결과
-    title: str                # 영상 제목 (개요에서 생성)
-    full_summary: str         # 전체 개요 요약 (노션 업로드용)
-    category: str             # AI가 판별한 카테고리
+    chunks: list  # Step 1에서 넘어온 청크 리스트
+    summarized_chunks: list  # 청크별 요약 결과
+    embeddings: list  # 벡터화 결과
+    title: str  # 영상 제목 (개요에서 생성)
+    full_summary: str  # 전체 개요 요약 (노션 업로드용)
+    category: str  # AI가 판별한 카테고리
 
 
 # ==========================================
@@ -67,9 +72,12 @@ class IntelligenceState(TypedDict):
 # ==========================================
 class VideoOverview(BaseModel):
     """전체 개요 생성 시 OpenAI가 반환해야 하는 구조"""
+
     title: str = Field(description="영상의 핵심 주제를 나타내는 제목 (15자 이내)")
     full_summary: str = Field(description="영상 전체 내용을 3~5문장으로 요약")
-    category: str = Field(description="영상의 카테고리 (예: 개발/IT, 경제, 자기계발, 교육 등)")
+    category: str = Field(
+        description="영상의 카테고리 (예: 개발/IT, 경제, 자기계발, 교육 등)"
+    )
 
 
 # ==========================================
@@ -80,7 +88,9 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
     video_id = state["video_id"]
     chunks = state["chunks"]
 
-    logger.info(f"[LangGraph: 청크별 요약] 시작 (video_id: {video_id}, 청크 수: {len(chunks)})")
+    logger.info(
+        f"[LangGraph: 청크별 요약] 시작 (video_id: {video_id}, 청크 수: {len(chunks)})"
+    )
 
     summarized_chunks = []
     for chunk in chunks:
@@ -105,6 +115,7 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
             summary = chunk["content"][:100] + "..."
 
         summarized_chunks.append({**chunk, "summary": summary})
+        logger.info(f"  청크 요약 내용 {summarized_chunks}")
         logger.info(f"  청크 {chunk['chunk_order']} 요약 완료")
 
     return {"summarized_chunks": summarized_chunks}
@@ -119,7 +130,9 @@ def embed_summaries_node(state: IntelligenceState) -> dict:
     summarized_chunks = state["summarized_chunks"]
     texts = [chunk["summary"] for chunk in summarized_chunks]
 
-    logger.info(f"[LangGraph: 벡터화] 시작 (video_id: {video_id}, 청크 수: {len(texts)})")
+    logger.info(
+        f"[LangGraph: 벡터화] 시작 (video_id: {video_id}, 청크 수: {len(texts)})"
+    )
 
     embeddings = []
     try:
@@ -203,6 +216,7 @@ def build_intelligence_graph():
 
     return graph.compile()
 
+
 # 그래프 싱글톤 (Celery 워커 시작 시 1회 빌드)
 intelligence_graph = build_intelligence_graph()
 
@@ -215,30 +229,77 @@ def collect_and_chunk(self, video_id: str):
     """자막 추출 → 정제 → 청킹 → DB 저장"""
     logger.info(f"[Step 1: 수집+청킹] 시작 (video_id: {video_id})")
 
-    # ── 수정 포인트 (현지) ──
-    # youtube_service.get_transcript(video_id) 호출하여 원본 자막 획득
+    try:
+        youtube_service = YouTubeService()
 
-    # ── 수정 포인트 (수왕) ──
-    # transcript_refine() → 특수문자, 공백, 인트로 제거
-    # transcript_chunking() → 텍스트 분할 (타임스탬프 유지)
+        try:
+            ####### 메타데이터 추출 #######
+            metadata = youtube_service.get_metadata(video_id)
+            logger.info(f"영상 제목: {metadata['video_title']}")
+        except Exception as e:
+            logger.warning(f"메타데이터를 가져오지 못했습니다 {e}")
+            metadata = {"video_id": video_id, "video_title": "Unknown"}
 
-    # ── 수정 포인트 (유리) ──
-    # Knowledge 레코드 생성 (status=PROCESSING)
-    # YoutubeKnowledgeChunk 테이블에 각 청크 저장
+        ####### 자막 추출 #######
+        logger.info(f"사용중인 API KEY 존재 여부: {bool(youtube_service.api_key)}")
+        transcript_data = youtube_service.get_transcript(video_id)
 
-    run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
+        if isinstance(transcript_data, str) and transcript_data.startswith("Error"):
+            logger.error(f"자막 추출 단계 최종 에러: {transcript_data}")
+            raise ValueError(f"자막 추출 실패: {transcript_data}")
+        logger.info(
+            f"추출된 로우 데이터 개수: {len(transcript_data) if transcript_data else 0}"
+        )
 
-    # ── 더미 데이터 (위 로직 완성 시 교체) ──
-    dummy_chunks = [
-        {"chunk_order": 0, "content": "첫 번째 청크 텍스트...", "start_time": 0},
-        {"chunk_order": 1, "content": "두 번째 청크 텍스트...", "start_time": 30000},
-        {"chunk_order": 2, "content": "세 번째 청크 텍스트...", "start_time": 60000},
-    ]
+        ####### 정제 #######
+        refine_seg = refine_transcript_segments(transcript_data)
+        if not refine_seg:
+            logger.warning("정제된 자막 데이터가 없습니다.")
+            return {"video_id": video_id, "chunks": []}
 
-    return {
-        "video_id": video_id,
-        "chunks": dummy_chunks,
-    }
+        ####### 청킹 (청크 기법은 여기서 지정해야함) #######
+        chunk = []
+        chunk = chunk_by_time(refine_seg, 60000)
+        logger.info(f"[Step 1] 완료: {len(chunk)} 개의 청크 생성")
+
+        final_chunks = []
+        for i, raw_chunk in enumerate(chunk):
+            # 1. raw_chunk 내의 모든 텍스트를 하나의 문자열로 합치기
+            if isinstance(raw_chunk, list):
+                combined_content = " ".join([seg.get("text", "") for seg in raw_chunk])
+                chunk_start_time = raw_chunk[0].get("start_time", 0) if raw_chunk else 0
+            else:
+                # 이미 문자열인 경우
+                combined_content = str(raw_chunk)
+                chunk_start_time = (
+                    refine_seg[i]["start_time"] if i < len(refine_seg) else 0
+                )
+
+            # 2. 형식에 맞게 데이터 구성
+            final_chunks.append(
+                {
+                    "chunk_order": i,
+                    "content": combined_content,  # "..." 형태의 문자열
+                    "start_time": chunk_start_time,
+                }
+            )
+
+        # ── DB 저장 로직 수정 (유리) ──
+        # Knowledge 레코드 생성 (status=PROCESSING)
+        # YoutubeKnowledgeChunk 테이블에 각 청크 저장
+        # 예: Knowledge.objects.create(...) 및 YoutubeKnowledgeChunk.objects.bulk_create(...)
+        # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
+        # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
+
+        logger.info(f"첫번째 청크 내용: {final_chunks[0]['content'][:50]}")
+        return {
+            "video_id": video_id,
+            "metadata": metadata,
+            "chunks": final_chunks,
+        }
+    except Exception as exc:
+        logger.error(f"[Step 1] 오류 발생: {exc}")
+        raise self.retry(exc=exc, countdown=5)
 
 
 # ==========================================
@@ -253,15 +314,17 @@ def run_intelligence_graph_task(self, data: dict):
     logger.info(f"[Step 2: LangGraph] 시작 (video_id: {video_id})")
 
     # LangGraph 실행
-    result = intelligence_graph.invoke({
-        "video_id": video_id,
-        "chunks": chunks,
-        "summarized_chunks": [],
-        "embeddings": [],
-        "title": "",
-        "full_summary": "",
-        "category": "",
-    })
+    result = intelligence_graph.invoke(
+        {
+            "video_id": video_id,
+            "chunks": chunks,
+            "summarized_chunks": [],
+            "embeddings": [],
+            "title": "",
+            "full_summary": "",
+            "category": "",
+        }
+    )
 
     # ── 수정 포인트 (유리) ──
     # Knowledge 테이블에 title, summary, category 업데이트
@@ -273,7 +336,7 @@ def run_intelligence_graph_task(self, data: dict):
     return {
         "video_id": video_id,
         "title": result["title"],
-        "full_summary": result["full_summary"],       # 노션 업로드용
+        "full_summary": result["full_summary"],  # 노션 업로드용
         "category": result["category"],
         "vector_count": len(result["embeddings"]),
         "summarized_chunks": result["summarized_chunks"],  # 청크별 요약
@@ -328,9 +391,9 @@ def run_core_pipeline_task(video_id: str):
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
 
     workflow = chain(
-        collect_and_chunk.s(video_id),        # Step 1: 현지/수왕
-        run_intelligence_graph_task.s(),       # Step 2: 채훈 (LangGraph)
-        update_pipeline_status.s(),           # Step 3: 완료
+        collect_and_chunk.s(video_id),  # Step 1: 현지/수왕
+        run_intelligence_graph_task.s(),  # Step 2: 채훈 (LangGraph)
+        update_pipeline_status.s(),  # Step 3: 완료
     ).on_error(handle_pipeline_failure.s(video_id))
 
     workflow.delay()

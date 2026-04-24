@@ -1,9 +1,71 @@
 from youtube_transcript_api import YouTubeTranscriptApi
+from urllib.parse import urlparse, parse_qs
+import os
+import requests
+from isodate import parse_duration
+
+import tempfile
+from pathlib import Path
+import whisper
+from yt_dlp import YoutubeDL
+from ..core.config import settings
 
 
 class YouTubeService:
-    def __init__(self):
+    BASE_URL = "https://www.googleapis.com/youtube/v3/videos"
+
+    # whisper_model (tiny < base < small < medium < large)
+    def __init__(self, whisper_model_name: str = "base"):
         self.api = YouTubeTranscriptApi()
+        self.api_key = settings.YOUTUBE_API_KEY
+        self.whisper_model_name = whisper_model_name
+        self._whisper_model = None
+
+    ###### url에서 video_id 추출 ######
+    def extract_youtube_video_id(self, url: str) -> str | None:
+        parsed = urlparse(url)
+
+        if parsed.hostname in ("www.youtube.com", "youtube.com"):
+            if parsed.path == "/watch":
+                return parse_qs(parsed.query).get("v", [None])[0]
+            if parsed.path.startswith("/shorts/"):
+                return parsed.path.split("/shorts/")[1].split("/")[0]
+
+        if parsed.hostname == "youtu.be":
+            return parsed.path.lstrip("/").split("/")[0]
+
+        return None
+
+    ###### youtube metadata 추출 ######
+    def get_metadata(self, video_id: str) -> dict:
+        params = {
+            "part": "snippet,contentDetails",
+            "id": video_id,
+            "key": self.api_key,
+        }
+
+        resp = requests.get(self.BASE_URL, params=params, timeout=10)
+        resp.raise_for_status()
+
+        data = resp.json()
+        items = data.get("items", [])
+        if not items:
+            raise ValueError("YouTube metadata not found")
+
+        item = items[0]
+
+        snippet = item["snippet"]
+        content_details = item["contentDetails"]
+
+        duration_iso = content_details["duration"]
+        duration_ms = int(parse_duration(duration_iso).total_seconds() * 1000)
+
+        return {
+            "video_id": video_id,
+            "video_title": snippet["title"],
+            "channel_name": snippet["channelTitle"],
+            "duration": duration_ms,
+        }
 
     def get_transcript(self, video_id: str, language="ko"):
         """
@@ -49,12 +111,96 @@ class YouTubeService:
                             "text": text.strip(),
                         }
                     )
+            if lines:
+                return lines
 
-            return lines
+            return self._run_stt_process(video_id)
 
         except Exception as e:
             return f"Error fetching transcript: {e}"
 
-    def _run_stt_process(self, video_id: str):
-        # STT 로직 구현부
-        pass
+    ###### STT 구현 관련 함수  ######
+    @property
+    def whisper_model(self):
+        if self._whisper_model is None:
+            self._whisper_model = whisper.load_model(self.whisper_model_name)
+        return self._whisper_model
+
+    def _run_stt_process(self, video_id: str, language: str = "ko"):
+        """
+        1. 유튜브 오디오 다운로드
+        2. Whisper로 전사
+        3. start_time / text 형식으로 반환
+        """
+        audio_path = None
+
+        try:
+            audio_path = self._download_youtube_audio(video_id)
+
+            result = self.whisper_model.transcribe(
+                audio=audio_path,
+                language=language,  # 한국어면 "ko"
+                task="transcribe",  # 번역이 아니라 원문 전사
+                verbose=False,
+            )
+
+            lines = []
+            for seg in result.get("segments", []):
+                text = seg.get("text", "").strip()
+                start = seg.get("start", 0.0)
+
+                if text:
+                    lines.append(
+                        {
+                            "start_time": int(float(start) * 1000),
+                            "text": text,
+                        }
+                    )
+
+            return lines
+
+        except Exception as e:
+            return f"Error running Whisper STT: {e}"
+
+        finally:
+            if audio_path and os.path.exists(audio_path):
+                try:
+                    os.remove(audio_path)
+                except Exception:
+                    pass
+
+    def _download_youtube_audio(self, video_id: str) -> str:
+        """
+        yt-dlp로 유튜브 오디오만 내려받아 wav 파일 경로 반환
+        ffmpeg 설치 필요
+        """
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
+        temp_dir = tempfile.mkdtemp(prefix="yt_audio_")
+        output_template = str(Path(temp_dir) / "%(id)s.%(ext)s")
+
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": output_template,
+            "quiet": True,
+            "noplaylist": True,
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "wav",
+                    "preferredquality": "192",
+                }
+            ],
+        }
+
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            video_id = info["id"]
+
+        wav_path = Path(temp_dir) / f"{video_id}.wav"
+        if not wav_path.exists():
+            raise FileNotFoundError(f"Audio file not found: {wav_path}")
+
+        return str(wav_path)
+
+    #################################
