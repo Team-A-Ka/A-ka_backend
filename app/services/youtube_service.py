@@ -1,9 +1,71 @@
 from youtube_transcript_api import YouTubeTranscriptApi
+from urllib.parse import urlparse, parse_qs
+import os
+import requests
+from isodate import parse_duration
+
+import tempfile
+from pathlib import Path
+import whisper
+from yt_dlp import YoutubeDL
+from ..core.config import settings
 
 
 class YouTubeService:
-    def __init__(self):
+    BASE_URL = "https://www.googleapis.com/youtube/v3/videos"
+
+    # whisper_model (tiny < base < small < medium < large)
+    def __init__(self, whisper_model_name: str = "base"):
         self.api = YouTubeTranscriptApi()
+        self.api_key = settings.YOUTUBE_API_KEY
+        self.whisper_model_name = whisper_model_name
+        self._whisper_model = None
+
+    ###### url에서 video_id 추출 ######
+    def extract_youtube_video_id(self, url: str) -> str | None:
+        parsed = urlparse(url)
+
+        if parsed.hostname in ("www.youtube.com", "youtube.com"):
+            if parsed.path == "/watch":
+                return parse_qs(parsed.query).get("v", [None])[0]
+            if parsed.path.startswith("/shorts/"):
+                return parsed.path.split("/shorts/")[1].split("/")[0]
+
+        if parsed.hostname == "youtu.be":
+            return parsed.path.lstrip("/").split("/")[0]
+
+        return None
+
+    ###### youtube metadata 추출 ######
+    def get_metadata(self, video_id: str) -> dict:
+        params = {
+            "part": "snippet,contentDetails",
+            "id": video_id,
+            "key": self.api_key,
+        }
+
+        resp = requests.get(self.BASE_URL, params=params, timeout=10)
+        resp.raise_for_status()
+
+        data = resp.json()
+        items = data.get("items", [])
+        if not items:
+            raise ValueError("YouTube metadata not found")
+
+        item = items[0]
+
+        snippet = item["snippet"]
+        content_details = item["contentDetails"]
+
+        duration_iso = content_details["duration"]
+        duration_ms = int(parse_duration(duration_iso).total_seconds() * 1000)
+
+        return {
+            "video_id": video_id,
+            "video_title": snippet["title"],
+            "channel_name": snippet["channelTitle"],
+            "duration": duration_ms,
+        }
 
     def get_transcript(self, video_id: str, language="ko"):
         """
