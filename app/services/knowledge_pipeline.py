@@ -10,20 +10,20 @@ Step 2 내부 LangGraph 흐름:
   [summarize_each_chunk] → [embed_summaries] → [generate_overview] → END
   (청크별 요약)            (요약문 벡터화)      (전체 개요 요약 — 노션 업로드용)
 
-진입점: run_core_pipeline_task(video_id, kakao_user_id) — router_service.py에서 호출됨
+진입점: run_core_pipeline_task(video_id) — router_service.py에서 호출됨
 """
 
 import asyncio
+from typing import TypedDict
+from pydantic import BaseModel, Field
 from celery import shared_task, chain
 from celery.utils.log import get_task_logger
 from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
 from app.core.config import settings
-from app.schemas.graph_state import IntelligenceState, VideoOverview
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
-# 더미 DB 작업용 헬퍼 (실제 연동 전까지 사용)
 
 logger = get_task_logger(__name__)
 
@@ -31,18 +31,17 @@ logger = get_task_logger(__name__)
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
-# --- Celery(sync) 안에서 async 코루틴을 실행하기 위한 헬퍼 ---
+# --- Celery에서 async 함수를 실행하기 위한 헬퍼 ---
 def run_async(coro):
-    """Celery 워커는 sync 컨텍스트이므로 asyncio.run으로 안전하게 실행."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
     if loop and loop.is_running():
-        # 거의 발생하지 않는 경로 (테스트 환경 등)
         return loop.create_task(coro)
-    return asyncio.run(coro)
+    else:
+        return asyncio.run(coro)
 
 
 # --- 더미 DB 작업 (실제 DB 로직으로 교체 예정) ---
@@ -50,10 +49,35 @@ async def dummy_async_db_operation(task_name: str, video_id: str, delay: int = 1
     logger.info(f"[{task_name}] DB 작업 시뮬레이션 (video_id: {video_id})")
     await asyncio.sleep(delay)
     logger.info(f"[{task_name}] DB 작업 완료")
-    import uuid
-    return uuid.uuid4() if task_name == "create_pipeline_record" else {"status": "success", "task_name": task_name}
+    return {"status": "success", "task_name": task_name}
 
-# IntelligenceState, VideoOverview는 app/schemas/graph_state.py에서 import
+
+# ==========================================
+# LangGraph State 정의
+# ==========================================
+class IntelligenceState(TypedDict):
+    """LangGraph 노드 간 공유되는 상태"""
+
+    video_id: str
+    chunks: list  # Step 1에서 넘어온 청크 리스트
+    summarized_chunks: list  # 청크별 요약 결과
+    embeddings: list  # 벡터화 결과
+    title: str  # 영상 제목 (개요에서 생성)
+    full_summary: str  # 전체 개요 요약 (노션 업로드용)
+    category: str  # AI가 판별한 카테고리
+
+
+# ==========================================
+# LangGraph용 Structured Output 스키마
+# ==========================================
+class VideoOverview(BaseModel):
+    """전체 개요 생성 시 OpenAI가 반환해야 하는 구조"""
+
+    title: str = Field(description="영상의 핵심 주제를 나타내는 제목 (15자 이내)")
+    full_summary: str = Field(description="영상 전체 내용을 3~5문장으로 요약")
+    category: str = Field(
+        description="영상의 카테고리 (예: 개발/IT, 경제, 자기계발, 교육 등)"
+    )
 
 
 # ==========================================
@@ -201,16 +225,9 @@ intelligence_graph = build_intelligence_graph()
 # Step 1: 수집 + 청킹  (담당: 현지, 수왕)
 # ==========================================
 @shared_task(bind=True, name="knowledge.collect_and_chunk")
-def collect_and_chunk(self, video_id: str, kakao_user_id: str):
-    """자막 추출 → 정제 → 청킹 → DB 저장
-
-    Args:
-        video_id: 유튜브 비디오 ID
-        kakao_user_id: 카카오 웹훅에서 받은 사용자 식별자 (provider_user_id)
-    """
-    logger.info(
-        f"[Step 1: 수집+청킹] 시작 (video_id: {video_id}, kakao_user_id: {kakao_user_id})"
-    )
+def collect_and_chunk(self, video_id: str):
+    """자막 추출 → 정제 → 청킹 → DB 저장"""
+    logger.info(f"[Step 1: 수집+청킹] 시작 (video_id: {video_id})")
 
     try:
         youtube_service = YouTubeService()
@@ -221,12 +238,7 @@ def collect_and_chunk(self, video_id: str, kakao_user_id: str):
             logger.info(f"영상 제목: {metadata['video_title']}")
         except Exception as e:
             logger.warning(f"메타데이터를 가져오지 못했습니다 {e}")
-            metadata = {
-                "video_id": video_id,
-                "video_title": "Unknown",
-                "channel_name": "Unknown",
-                "duration": 0,
-            }
+            metadata = {"video_id": video_id, "video_title": "Unknown"}
 
         ####### 자막 추출 #######
         logger.info(f"사용중인 API KEY 존재 여부: {bool(youtube_service.api_key)}")
@@ -243,13 +255,7 @@ def collect_and_chunk(self, video_id: str, kakao_user_id: str):
         refine_seg = refine_transcript_segments(transcript_data)
         if not refine_seg:
             logger.warning("정제된 자막 데이터가 없습니다.")
-            return {
-                "video_id": video_id,
-                "knowledge_id": None,
-                "original_url": f"https://www.youtube.com/watch?v={video_id}",
-                "metadata": metadata,
-                "chunks": [],
-            }
+            return {"video_id": video_id, "chunks": []}
 
         ####### 청킹 (청크 기법은 여기서 지정해야함) #######
         chunk = []
@@ -278,17 +284,16 @@ def collect_and_chunk(self, video_id: str, kakao_user_id: str):
                 }
             )
 
-        original_url = f"https://www.youtube.com/watch?v={video_id}"
-        knowledge_id = run_async(dummy_async_db_operation("create_pipeline_record", video_id, 1))
-        logger.info(
-            f"[Step 1] 레코드 생성 완료 (knowledge_id: {knowledge_id}) — 청크 {len(final_chunks)}개 INSERT"
-        )
-        logger.info(f"첫번째 청크 내용: {final_chunks[0]['content'][:50]}")
+        # ── DB 저장 로직 수정 (유리) ──
+        # Knowledge 레코드 생성 (status=PROCESSING)
+        # YoutubeKnowledgeChunk 테이블에 각 청크 저장
+        # 예: Knowledge.objects.create(...) 및 YoutubeKnowledgeChunk.objects.bulk_create(...)
+        # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
+        # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
 
+        logger.info(f"첫번째 청크 내용: {final_chunks[0]['content'][:50]}")
         return {
             "video_id": video_id,
-            "knowledge_id": str(knowledge_id) if knowledge_id else None,
-            "original_url": original_url,
             "metadata": metadata,
             "chunks": final_chunks,
         }
@@ -304,14 +309,9 @@ def collect_and_chunk(self, video_id: str, kakao_user_id: str):
 def run_intelligence_graph_task(self, data: dict):
     """LangGraph를 실행하여 요약 → 벡터화 → 개요 생성을 순차 수행"""
     video_id = data.get("video_id")
-    knowledge_id = data.get("knowledge_id")
-    original_url = data.get("original_url") or f"https://www.youtube.com/watch?v={video_id}"
-    metadata = data.get("metadata", {})
     chunks = data.get("chunks", [])
 
-    logger.info(
-        f"[Step 2: LangGraph] 시작 (video_id: {video_id}, knowledge_id: {knowledge_id})"
-    )
+    logger.info(f"[Step 2: LangGraph] 시작 (video_id: {video_id})")
 
     # LangGraph 실행
     result = intelligence_graph.invoke(
@@ -326,23 +326,20 @@ def run_intelligence_graph_task(self, data: dict):
         }
     )
 
-    summarized_chunks = result.get("summarized_chunks", [])
-    embeddings = result.get("embeddings") or []
+    # ── 수정 포인트 (유리) ──
+    # Knowledge 테이블에 title, summary, category 업데이트
+    # YoutubeKnowledgeChunk에 벡터 저장
+    run_async(dummy_async_db_operation("intelligence_DB_update", video_id, 1))
 
-    run_async(dummy_async_db_operation("update_pipeline_result", video_id, 1))
-
-    logger.info(
-        f"[Step 2: LangGraph] 완료 — knowledge_id: {knowledge_id}, 제목: {result['title']}, "
-        f"카테고리: {result['category']}"
-    )
+    logger.info(f"[Step 2: LangGraph] 완료 — 제목: {result['title']}")
 
     return {
         "video_id": video_id,
-        "knowledge_id": knowledge_id,
         "title": result["title"],
         "full_summary": result["full_summary"],  # 노션 업로드용
         "category": result["category"],
-        "vector_count": len(embeddings),
+        "vector_count": len(result["embeddings"]),
+        "summarized_chunks": result["summarized_chunks"],  # 청크별 요약
     }
 
 
@@ -353,22 +350,18 @@ def run_intelligence_graph_task(self, data: dict):
 def update_pipeline_status(self, data: dict):
     """Knowledge.status → COMPLETED 업데이트"""
     video_id = data.get("video_id")
-    knowledge_id = data.get("knowledge_id")
     vector_count = data.get("vector_count", 0)
     title = data.get("title", "")
 
     logger.info(
-        f"[Step 3: 완료] 파이프라인 종료 (video_id: {video_id}, knowledge_id: {knowledge_id}, "
+        f"[Step 3: 완료] 파이프라인 종료 (video_id: {video_id}, "
         f"제목: {title}, 벡터 {vector_count}개)"
     )
 
-    # ── Knowledge.status → COMPLETED ──
-    if knowledge_id:
-        run_async(dummy_async_db_operation("mark_completed", video_id, 1))
-    else:
-        logger.warning("[Step 3] knowledge_id 없음 — mark_completed 스킵 (Step 1 이슈 가능성)")
-
-    # TODO(채훈 후속): 노션 업로드 트리거 (full_summary를 노션 페이지에 게시)
+    # ── 수정 포인트 (유리) ──
+    # Knowledge.status = ProcessStatus.COMPLETED 로 DB 업데이트
+    # TODO: 노션 업로드 트리거 (full_summary를 노션 페이지에 게시)
+    run_async(dummy_async_db_operation("status_update_COMPLETED", video_id, 1))
 
     logger.info("지식 데이터 처리 완료! (Status -> COMPLETED)")
     return "Pipeline All Done"
@@ -378,45 +371,30 @@ def update_pipeline_status(self, data: dict):
 # 에러 핸들러
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
-def handle_pipeline_failure(self, task_id, video_id: str, kakao_user_id: str):
-    """에러 발생 시 Knowledge.status → FAILED
-
-    knowledge_id는 Step 1 내부에서 생성되므로 on_error에 직접 전달 불가.
-    대신 (kakao_user_id, video_id) 조합으로 Knowledge를 역조회해 FAILED 처리한다.
-    """
+def handle_pipeline_failure(self, task_id, video_id: str):
+    """에러 발생 시 Knowledge.status → FAILED"""
     logger.error(
-        f"[Error] 파이프라인 에러 발생 "
-        f"(video_id: {video_id}, kakao_user_id: {kakao_user_id}, task: {task_id})"
+        f"[Error] 파이프라인 에러 발생 (video_id: {video_id}, task: {task_id})"
     )
-    try:
-        run_async(dummy_async_db_operation("mark_failed", video_id, 1))
-    except Exception as e:
-        # 상태 업데이트마저 실패해도 Celery 에러 핸들러는 계속 진행되도록 흡수
-        logger.error(f"[Error] FAILED 상태 업데이트 실패: {e}")
+    run_async(dummy_async_db_operation("status_update_FAILED", video_id, 1))
 
 
 # ==========================================
 # 파이프라인 진입점 — router_service.py에서 호출
 # ==========================================
-def run_core_pipeline_task(video_id: str, kakao_user_id: str):
+def run_core_pipeline_task(video_id: str):
     """
     실행 순서 (순차 chain):
       Step 1 → Step 2 → Step 3
       (수집+청킹) → (LangGraph: 요약→벡터화→개요) → (완료)
-
-    Args:
-        video_id: 유튜브 비디오 ID
-        kakao_user_id: 카카오 웹훅에서 받은 사용자 식별자 (provider_user_id)
     """
-    logger.info(
-        f"====== 파이프라인 트리거 (video_id: {video_id}, kakao_user_id: {kakao_user_id}) ======"
-    )
+    logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
 
     workflow = chain(
-        collect_and_chunk.s(video_id, kakao_user_id),  # Step 1: 현지/수왕
+        collect_and_chunk.s(video_id),  # Step 1: 현지/수왕
         run_intelligence_graph_task.s(),  # Step 2: 채훈 (LangGraph)
         update_pipeline_status.s(),  # Step 3: 완료
-    ).on_error(handle_pipeline_failure.s(video_id, kakao_user_id))
+    ).on_error(handle_pipeline_failure.s(video_id))
 
     workflow.delay()
 
