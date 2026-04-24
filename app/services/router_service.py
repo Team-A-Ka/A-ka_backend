@@ -101,8 +101,10 @@ def process_ai_routing(self, user_id: str, user_message: str):
             logger.warning("➔ UPLOAD 의도이나 URL이 포함되어 있지 않습니다.")
             
     elif intent == "SEARCH":
-        logger.info(f"➔ 의도 파악: {intent} (RAG 검색 파이프라인으로 이동 예정)")
-        # TODO: SEARCH 파이프라인 호출
+        logger.info(f"➔ 의도 파악: {intent} (RAG 검색 파이프라인 실행)")
+        from app.services.search_service import search_and_answer
+        search_result = search_and_answer(user_id, user_message)
+        logger.info(f"➔ 검색 답변 생성 완료 (출처: {search_result['sources']}개)")
         
     else:
         logger.info(f"➔ 의도 파악: {intent} (일반 대화 및 예외 처리 예정)")
