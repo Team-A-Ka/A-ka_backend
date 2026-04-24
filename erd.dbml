@@ -20,17 +20,24 @@ Table category {
 
 Table user {
   id bigint [pk, increment] // uuid 대신 자동 증가 정수형 사용
-  user_name varchar(50) 
+  user_name varchar(50) [unique]
+  is_active boolean [default: true]
   created_at timestamp [default: `now()`]
   updated_at timestamp [default: `now()`]
 }
 
-Table user_category {
-  id uuid [pk, default: `gen_random_uuid()`]
-  user_id integer [ref: > user.id]
-  category_id integer [ref: > category.id]
+Table user_channel_identity {
+  id bigint [pk, increment]
+  user_id bigint [ref: > user.id]
+  provider varchar(50)
+  provider_user_id varchar(255) 
   created_at timestamp [default: `now()`]
   updated_at timestamp [default: `now()`]
+
+  Indexes {
+    user_id
+    (provider, provider_user_id) [unique, name: 'uq_provider_user']
+  }
 }
 
 Table knowledge {
@@ -41,7 +48,7 @@ Table knowledge {
   title varchar(255)
   original_url varchar(255) 
   status status_enum [default: 'PENDING']
-  summary varchar(255) 
+  summary text
   hit_count integer [default: 1]
   created_at timestamp [default: `now()`]
   updated_at timestamp [default: `now()`]
