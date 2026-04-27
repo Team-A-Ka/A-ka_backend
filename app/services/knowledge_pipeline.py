@@ -1,6 +1,5 @@
 import asyncio
-from typing import TypedDict
-from pydantic import BaseModel, Field
+from app.schemas.graph_state import IntelligenceState, VideoOverview
 from celery import shared_task, chain
 from celery.utils.log import get_task_logger
 from openai import OpenAI
@@ -37,32 +36,7 @@ async def dummy_async_db_operation(task_name: str, video_id: str, delay: int = 1
     return {"status": "success", "task_name": task_name}
 
 
-# ==========================================
-# LangGraph State 정의
-# ==========================================
-class IntelligenceState(TypedDict):
-    """LangGraph 노드 간 공유되는 상태"""
-
-    video_id: str
-    chunks: list  # Step 1에서 넘어온 청크 리스트
-    summarized_chunks: list  # 청크별 요약 결과
-    embeddings: list  # 벡터화 결과
-    title: str  # 영상 제목 (개요에서 생성)
-    full_summary: str  # 전체 개요 요약 (노션 업로드용)
-    category: str  # AI가 판별한 카테고리
-
-
-# ==========================================
-# LangGraph용 Structured Output 스키마
-# ==========================================
-class VideoOverview(BaseModel):
-    """전체 개요 생성 시 OpenAI가 반환해야 하는 구조"""
-
-    title: str = Field(description="영상의 핵심 주제를 나타내는 제목 (15자 이내)")
-    full_summary: str = Field(description="영상 전체 내용을 3~5문장으로 요약")
-    category: str = Field(
-        description="영상의 카테고리 (예: 개발/IT, 경제, 자기계발, 교육 등)"
-    )
+# IntelligenceState, VideoOverview는 app/schemas/graph_state.py에서 import
 
 
 # ==========================================
