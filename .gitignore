@@ -370,5 +370,10 @@ pip-selfcheck.json
 # End of https://www.toptal.com/developers/gitignore/api/python,node,visualstudiocode,react,venv
 
 # 로컬 개발 메모/설명 파일 (README.md 제외)
-/*.md
+docs/
+*.md
+!README.md
+
+docs/
+*.md
 !README.md
