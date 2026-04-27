@@ -1,18 +1,3 @@
-"""
-[지식 입력 파이프라인]
-
-실행 흐름 (모두 순차 실행):
-  Step 1  collect_and_chunk          → 현지/수왕 담당  (자막 추출 + 정제 + 청킹)
-  Step 2  run_intelligence_graph     → 채훈 담당      (LangGraph: 요약 → 벡터화 → 개요 생성)
-  Step 3  update_status              → 자동           (Knowledge 상태 → COMPLETED)
-
-Step 2 내부 LangGraph 흐름:
-  [summarize_each_chunk] → [embed_summaries] → [generate_overview] → END
-  (청크별 요약)            (요약문 벡터화)      (전체 개요 요약 — 노션 업로드용)
-
-진입점: run_core_pipeline_task(video_id) — router_service.py에서 호출됨
-"""
-
 import asyncio
 from typing import TypedDict
 from pydantic import BaseModel, Field
@@ -115,7 +100,7 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
             summary = chunk["content"][:100] + "..."
 
         summarized_chunks.append({**chunk, "summary": summary})
-        logger.info(f"  청크 요약 내용 {summarized_chunks}")
+        # logger.info(f"  청크 요약 내용 {summarized_chunks}")
         logger.info(f"  청크 {chunk['chunk_order']} 요약 완료")
 
     return {"summarized_chunks": summarized_chunks}
@@ -236,6 +221,14 @@ def collect_and_chunk(self, video_id: str):
             ####### 메타데이터 추출 #######
             metadata = youtube_service.get_metadata(video_id)
             logger.info(f"영상 제목: {metadata['video_title']}")
+            """ metadata 반환 형식
+            {
+            "video_id": video_id,
+            "video_title": snippet["title"],
+            "channel_name": snippet["channelTitle"],
+            "duration": duration_ms,
+            }
+            """
         except Exception as e:
             logger.warning(f"메타데이터를 가져오지 못했습니다 {e}")
             metadata = {"video_id": video_id, "video_title": "Unknown"}
@@ -258,29 +251,17 @@ def collect_and_chunk(self, video_id: str):
             return {"video_id": video_id, "chunks": []}
 
         ####### 청킹 (청크 기법은 여기서 지정해야함) #######
-        chunk = []
-        chunk = chunk_by_time(refine_seg, 60000)
-        logger.info(f"[Step 1] 완료: {len(chunk)} 개의 청크 생성")
+        chunks = []
+        chunks = chunk_by_time(refine_seg, 60000)
+        logger.info(f"[Step 1] 완료: {len(chunks)} 개의 청크 생성")
 
         final_chunks = []
-        for i, raw_chunk in enumerate(chunk):
-            # 1. raw_chunk 내의 모든 텍스트를 하나의 문자열로 합치기
-            if isinstance(raw_chunk, list):
-                combined_content = " ".join([seg.get("text", "") for seg in raw_chunk])
-                chunk_start_time = raw_chunk[0].get("start_time", 0) if raw_chunk else 0
-            else:
-                # 이미 문자열인 경우
-                combined_content = str(raw_chunk)
-                chunk_start_time = (
-                    refine_seg[i]["start_time"] if i < len(refine_seg) else 0
-                )
-
-            # 2. 형식에 맞게 데이터 구성
+        for i, raw_chunk in enumerate(chunks):
             final_chunks.append(
                 {
                     "chunk_order": i,
-                    "content": combined_content,  # "..." 형태의 문자열
-                    "start_time": chunk_start_time,
+                    "content": raw_chunk.get("content", ""),
+                    "start_time": raw_chunk.get("start_time", 0),
                 }
             )
 
@@ -291,7 +272,9 @@ def collect_and_chunk(self, video_id: str):
         # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
         # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
 
+        logger.info(f"첫번째 청크 시작시간: {final_chunks[0]['start_time']}")
         logger.info(f"첫번째 청크 내용: {final_chunks[0]['content'][:50]}")
+
         return {
             "video_id": video_id,
             "metadata": metadata,
