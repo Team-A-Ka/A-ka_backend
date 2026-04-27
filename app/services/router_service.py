@@ -101,7 +101,7 @@ def process_ai_routing(self, user_id: str, user_message: str):
             video_id = parse_youtube_video_id(detected_url)
             if video_id:
                 logger.info(f"➔ 유튜브 영상 감지 완료 (Video ID: {video_id}). 지식 파이프라인으로 격발합니다.")
-                # 비동기 백그라운드 트리거 — user_id 전파 (유리 DB 매핑용)
+                # 비동기 백그라운드 트리거 — user_id 전파 (DB 매핑용)
                 run_core_pipeline_task(video_id, user_id)
             else:
                 logger.warning(f"➔ URL({detected_url})이 파싱되었으나 올바른 유튜브 형식이 아닙니다.")

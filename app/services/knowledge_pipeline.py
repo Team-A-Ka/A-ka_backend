@@ -120,7 +120,10 @@ def generate_overview(state: IntelligenceState) -> dict:
     summarized_chunks = state.get("summarized_chunks", [])
 
     all_summaries = "\n".join(
-        [f"[{c.get('chunk_order', '?')}] {c.get('summary', '')}" for c in summarized_chunks]
+        [
+            f"[{c.get('chunk_order', '?')}] {c.get('summary', '')}"
+            for c in summarized_chunks
+        ]
     )
 
     logger.info(f"[LangGraph: 개요 생성] 시작 (video_id: {video_id})")
@@ -245,7 +248,7 @@ def collect_and_chunk(self, video_id: str):
                 }
             )
 
-        # ── DB 저장 로직 수정 (유리) ──
+        # ── DB 저장 로직 수정 () ──
         # Knowledge 레코드 생성 (status=PROCESSING)
         # YoutubeKnowledgeChunk 테이블에 각 청크 저장
         # 예: Knowledge.objects.create(...) 및 YoutubeKnowledgeChunk.objects.bulk_create(...)
@@ -370,18 +373,20 @@ def save_link_only_task(self, video_id: str):
     """
     SAVE_ONLY 의도: LangGraph 요약을 타지 않고 단순 링크만 저장
     """
-    logger.info(f"====== 단순 링크 저장 파이프라인 트리거 (video_id: {video_id}) ======")
-    
+    logger.info(
+        f"====== 단순 링크 저장 파이프라인 트리거 (video_id: {video_id}) ======"
+    )
+
     try:
         # 1. 메타데이터 (제목 등) 가져오기
         yt_service = YouTubeService()
         metadata = yt_service.get_video_info(video_id)
         title = metadata.get("title", f"영상 {video_id}")
-        
+
         # 2. DB 저장 시뮬레이션 (유리님이 채워넣을 부분)
         # 예: Knowledge.objects.create(video_id=video_id, title=title, status=COMPLETED)
         run_async(dummy_async_db_operation("save_link_only_DB", video_id, 1))
-        
+
         logger.info(f"[단순 저장 완료] 제목: {title}")
         return {"video_id": video_id, "title": title, "status": "COMPLETED"}
     except Exception as exc:

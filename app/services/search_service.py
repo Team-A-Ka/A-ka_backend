@@ -7,6 +7,7 @@ LangGraph 흐름:
 
 호출 위치: router_service.py → intent == "SEARCH" 분기
 """
+
 import logging
 from openai import OpenAI
 from sqlalchemy import text
@@ -174,6 +175,7 @@ def build_search_graph():
 
     return graph.compile()
 
+
 # 그래프 싱글톤
 search_graph = build_search_graph()
 
@@ -185,14 +187,16 @@ def search_and_answer(user_id: str, query: str) -> dict:
     """SEARCH 파이프라인 실행"""
     logger.info(f"[SEARCH] 시작 (user: {user_id}, query: {query[:30]}...)")
 
-    result = search_graph.invoke({
-        "user_id": user_id,
-        "query": query,
-        "query_vector": [],
-        "chunks": [],
-        "answer": "",
-        "sources": 0,
-    })
+    result = search_graph.invoke(
+        {
+            "user_id": user_id,
+            "query": query,
+            "query_vector": [],
+            "chunks": [],
+            "answer": "",
+            "sources": 0,
+        }
+    )
 
     logger.info(f"[SEARCH] 완료 — 답변 생성됨 (출처: {result['sources']}개)")
 
