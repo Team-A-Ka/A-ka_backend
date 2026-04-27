@@ -19,6 +19,7 @@ openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 # 의도 분류 상수 Enum
 class IntentType(str, Enum):
+    SAVE_ONLY = "SAVE_ONLY"  # 단순 링크 저장
     UPLOAD = "UPLOAD"     # 링크 저장, 영상 요약 및 적재 등
     SEARCH = "SEARCH"     # 과거 데이터 기반 질문, 검색, RAG
     UNKNOWN = "UNKNOWN"   # 기타 일상 대화, 의미 없는 텍스트
@@ -63,9 +64,10 @@ def process_ai_routing(self, user_id: str, user_message: str):
                         "role": "system",
                         "content": (
                             "너는 사용자의 입력을 분석하여 핵심 의도를 파악하는 AI 시스템이야. "
-                            "1. 사용자가 지식이나 유튜브 링크를 저장, 업로드, 요약해달라고 하면 'UPLOAD'로 묶어. "
-                            "2. 질문을 하거나 과거의 정보를 찾아달라고 하면 'SEARCH'로 묶어. "
-                            "3. 그 외의 단순 인사, 잡담, 파악 불가능한 말은 모두 'UNKNOWN'으로 처리해. "
+                            "1. 사용자가 아무런 분석/요약 지시 없이 단순히 유튜브 링크만 덩그러니 보냈거나 '저장해'라고만 하면 'SAVE_ONLY'로 묶어. "
+                            "2. 사용자가 영상의 내용을 파악, 요약, 분석해달라고 명시적으로 지시하면 'UPLOAD'로 묶어. "
+                            "3. 질문을 하거나 과거의 정보를 찾아달라고 하면 'SEARCH'로 묶어. "
+                            "4. 그 외의 단순 인사, 잡담, 파악 불가능한 말은 모두 'UNKNOWN'으로 처리해. "
                             "또한 텍스트에 웹사이트 링크가 들어있다면 반드시 그대로 추출해줘."
                         )
                     },
@@ -105,6 +107,18 @@ def process_ai_routing(self, user_id: str, user_message: str):
                 logger.warning(f"➔ URL({detected_url})이 파싱되었으나 올바른 유튜브 형식이 아닙니다.")
         else:
             logger.warning("➔ UPLOAD 의도이나 URL이 포함되어 있지 않습니다.")
+
+    elif intent == "SAVE_ONLY":
+        if detected_url:
+            video_id = parse_youtube_video_id(detected_url)
+            if video_id:
+                logger.info(f"➔ 단순 링크 저장 감지 (Video ID: {video_id}). 가벼운 저장 파이프라인을 격발합니다.")
+                from app.services.knowledge_pipeline import save_link_only_task
+                save_link_only_task.delay(video_id)
+            else:
+                logger.warning(f"➔ URL({detected_url})이 파싱되었으나 올바른 유튜브 형식이 아닙니다.")
+        else:
+            logger.warning("➔ SAVE_ONLY 의도이나 URL이 포함되어 있지 않습니다.")
             
     elif intent == "SEARCH":
         logger.info(f"➔ 의도 파악: {intent} (RAG 검색 파이프라인 실행)")
