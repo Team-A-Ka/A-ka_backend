@@ -255,6 +255,21 @@ def collect_and_chunk(self, video_id: str):
         # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
         # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
 
+        """
+        {'video_id': 'dQw4w9WgXcQ', 
+                'metadata': {'video_id': 'dQw4w9WgXcQ', 
+                            'video_title': 'Rick Astley - Never Gonna Give You Up (Official Video) (4K Remaster)', 
+                            'channel_name': 'Rick Astley', 
+                            'duration': 214000}, 
+                'chunks': [
+                            {'chunk_order': 0, 
+                            'content': '[♪♪♪] ♪ We\'re no strangers to love ♪ ♪ You know the rules ...',
+                            'start_time': 1360},
+                            {...}
+                            ]
+                }
+        """
+
         logger.info(f"첫번째 청크 시작시간: {final_chunks[0]['start_time']}")
         logger.info(f"첫번째 청크 내용: {final_chunks[0]['content'][:50]}")
 
