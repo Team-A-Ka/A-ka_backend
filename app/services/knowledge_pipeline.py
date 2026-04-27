@@ -44,8 +44,8 @@ async def dummy_async_db_operation(task_name: str, video_id: str, delay: int = 1
 # ==========================================
 def summarize_each_chunk(state: IntelligenceState) -> dict:
     """각 청크의 content를 OpenAI로 요약"""
-    video_id = state["video_id"]
-    chunks = state["chunks"]
+    video_id = state.get("video_id", "Unknown")
+    chunks = state.get("chunks", [])
 
     logger.info(
         f"[LangGraph: 청크별 요약] 시작 (video_id: {video_id}, 청크 수: {len(chunks)})"
@@ -69,13 +69,15 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
                 ],
             )
             summary = response.choices[0].message.content.strip()
+            if response.usage:
+                logger.info(f"  [토큰 사용량] 청크 요약: {response.usage.total_tokens}")
         except Exception as e:
-            logger.warning(f"  청크 {chunk['chunk_order']} 요약 실패: {e}")
-            summary = chunk["content"][:100] + "..."
+            logger.warning(f"  청크 {chunk.get('chunk_order', '?')} 요약 실패: {e}")
+            summary = chunk.get("content", "")[:100] + "..."
 
         summarized_chunks.append({**chunk, "summary": summary})
         # logger.info(f"  청크 요약 내용 {summarized_chunks}")
-        logger.info(f"  청크 {chunk['chunk_order']} 요약 완료")
+        logger.info(f"  청크 {chunk.get('chunk_order', '?')} 요약 완료")
 
     return {"summarized_chunks": summarized_chunks}
 
@@ -85,9 +87,9 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
 # ==========================================
 def embed_summaries_node(state: IntelligenceState) -> dict:
     """청크별 요약문을 OpenAI Embeddings로 벡터화"""
-    video_id = state["video_id"]
-    summarized_chunks = state["summarized_chunks"]
-    texts = [chunk["summary"] for chunk in summarized_chunks]
+    video_id = state.get("video_id", "Unknown")
+    summarized_chunks = state.get("summarized_chunks", [])
+    texts = [chunk.get("summary", "") for chunk in summarized_chunks]
 
     logger.info(
         f"[LangGraph: 벡터화] 시작 (video_id: {video_id}, 청크 수: {len(texts)})"
@@ -100,6 +102,8 @@ def embed_summaries_node(state: IntelligenceState) -> dict:
             input=texts,
         )
         embeddings = [item.embedding for item in response.data]
+        if hasattr(response, "usage") and response.usage:
+            logger.info(f"  [토큰 사용량] 임베딩: {response.usage.total_tokens}")
         logger.info(f"  벡터 {len(embeddings)}개 생성 (차원: {len(embeddings[0])})")
     except Exception as e:
         logger.error(f"  Embedding API 호출 실패: {e}")
@@ -112,11 +116,11 @@ def embed_summaries_node(state: IntelligenceState) -> dict:
 # ==========================================
 def generate_overview(state: IntelligenceState) -> dict:
     """청크별 요약을 종합하여 영상 전체 제목/개요/카테고리 생성"""
-    video_id = state["video_id"]
-    summarized_chunks = state["summarized_chunks"]
+    video_id = state.get("video_id", "Unknown")
+    summarized_chunks = state.get("summarized_chunks", [])
 
     all_summaries = "\n".join(
-        [f"[{c['chunk_order']}] {c['summary']}" for c in summarized_chunks]
+        [f"[{c.get('chunk_order', '?')}] {c.get('summary', '')}" for c in summarized_chunks]
     )
 
     logger.info(f"[LangGraph: 개요 생성] 시작 (video_id: {video_id})")
@@ -138,6 +142,8 @@ def generate_overview(state: IntelligenceState) -> dict:
             response_format=VideoOverview,
         )
         overview = response.choices[0].message.parsed
+        if response.usage:
+            logger.info(f"  [토큰 사용량] 개요 생성: {response.usage.total_tokens}")
         title = overview.title
         full_summary = overview.full_summary
         category = overview.category

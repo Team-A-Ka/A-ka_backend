@@ -25,7 +25,7 @@ openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 # ==========================================
 def vectorize_query(state: SearchState) -> dict:
     """사용자 질문을 1536차원 벡터로 변환"""
-    query = state["query"]
+    query = state.get("query", "")
     logger.info(f"[SEARCH 노드1: 벡터화] 시작")
 
     response = openai_client.embeddings.create(
@@ -33,6 +33,8 @@ def vectorize_query(state: SearchState) -> dict:
         input=query,
     )
     query_vector = response.data[0].embedding
+    if hasattr(response, "usage") and response.usage:
+        logger.info(f"  [토큰 사용량] 벡터화: {response.usage.total_tokens}")
 
     logger.info(f"[SEARCH 노드1: 벡터화] 완료 (차원: {len(query_vector)})")
     return {"query_vector": query_vector}
@@ -43,8 +45,8 @@ def vectorize_query(state: SearchState) -> dict:
 # ==========================================
 def search_chunks(state: SearchState) -> dict:
     """pgvector에서 유사도 높은 청크 검색"""
-    query_vector = state["query_vector"]
-    user_id = state["user_id"]
+    query_vector = state.get("query_vector", [])
+    user_id = state.get("user_id", "")
 
     logger.info(f"[SEARCH 노드2: 검색] 시작")
 
@@ -83,8 +85,8 @@ def search_chunks(state: SearchState) -> dict:
 # ==========================================
 def generate_answer(state: SearchState) -> dict:
     """검색된 청크를 context로 넣어 OpenAI에 답변 생성"""
-    query = state["query"]
-    chunks = state["chunks"]
+    query = state.get("query", "")
+    chunks = state.get("chunks", [])
 
     logger.info(f"[SEARCH 노드3: RAG 답변] 시작 (context: {len(chunks)}개 청크)")
 
@@ -117,6 +119,8 @@ def generate_answer(state: SearchState) -> dict:
             ],
         )
         answer = response.choices[0].message.content.strip()
+        if response.usage:
+            logger.info(f"  [토큰 사용량] RAG 답변: {response.usage.total_tokens}")
     except Exception as e:
         logger.error(f"RAG 답변 생성 실패: {e}")
         answer = "답변 생성 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."

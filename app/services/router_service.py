@@ -1,4 +1,5 @@
 import re
+import time
 from enum import Enum
 from pydantic import BaseModel, Field
 from celery.utils.log import get_task_logger
@@ -52,38 +53,43 @@ def process_ai_routing(self, user_id: str, user_message: str):
     intent = "UNKNOWN"
     detected_url = None
 
-    try:
-        # OpenAI 베타 API(Structured Outputs)를 활용한 파싱
-        response = openai_client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "너는 사용자의 입력을 분석하여 핵심 의도를 파악하는 AI 시스템이야. "
-                        "1. 사용자가 지식이나 유튜브 링크를 저장, 업로드, 요약해달라고 하면 'UPLOAD'로 묶어. "
-                        "2. 질문을 하거나 과거의 정보를 찾아달라고 하면 'SEARCH'로 묶어. "
-                        "3. 그 외의 단순 인사, 잡담, 파악 불가능한 말은 모두 'UNKNOWN'으로 처리해. "
-                        "또한 텍스트에 웹사이트 링크가 들어있다면 반드시 그대로 추출해줘."
-                    )
-                },
-                {"role": "user", "content": user_message}
-            ],
-            response_format=IntentExtraction,
-        )
-        
-        parsed_result = response.choices[0].message.parsed
-        if parsed_result:
-            intent = parsed_result.intent.value
-            detected_url = parsed_result.detected_url
-            logger.info(f"➔ [OpenAI 파싱 결과] Intent: {intent}, URL: {detected_url}")
-        else:
-            logger.error("OpenAI 파싱 결과가 비어 있습니다.")
+    for attempt in range(3):
+        try:
+            # OpenAI 베타 API(Structured Outputs)를 활용한 파싱
+            response = openai_client.beta.chat.completions.parse(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "너는 사용자의 입력을 분석하여 핵심 의도를 파악하는 AI 시스템이야. "
+                            "1. 사용자가 지식이나 유튜브 링크를 저장, 업로드, 요약해달라고 하면 'UPLOAD'로 묶어. "
+                            "2. 질문을 하거나 과거의 정보를 찾아달라고 하면 'SEARCH'로 묶어. "
+                            "3. 그 외의 단순 인사, 잡담, 파악 불가능한 말은 모두 'UNKNOWN'으로 처리해. "
+                            "또한 텍스트에 웹사이트 링크가 들어있다면 반드시 그대로 추출해줘."
+                        )
+                    },
+                    {"role": "user", "content": user_message}
+                ],
+                response_format=IntentExtraction,
+            )
+            
+            parsed_result = response.choices[0].message.parsed
+            if parsed_result:
+                intent = parsed_result.intent.value
+                detected_url = parsed_result.detected_url
+                logger.info(f"➔ [OpenAI 파싱 결과] Intent: {intent}, URL: {detected_url}")
+            else:
+                logger.error("OpenAI 파싱 결과가 비어 있습니다.")
+            break  # 성공 시 루프 탈출
 
-    except Exception as e:
-        logger.error(f"OpenAI 의도 분석 중 에러 발생: {e}")
-        # 혹시라도 실패하면 장애 방지를 위해 기본값 UNKNOWN으로 처리
-        intent = "UNKNOWN"
+        except Exception as e:
+            logger.error(f"OpenAI 의도 분석 중 에러 발생 (시도 {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time.sleep(1)
+            else:
+                # 혹시라도 모두 실패하면 장애 방지를 위해 기본값 UNKNOWN으로 처리
+                intent = "UNKNOWN"
 
     # ==========================================
     # 파이프라인 분기 (Routing)
