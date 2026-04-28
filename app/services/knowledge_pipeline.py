@@ -8,17 +8,26 @@ from app.core.config import settings
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
-from app.repositories.knowledge import save_chunks_to_db, create_base
-from app.models.knowledge import Knowledge, YoutubeMetadata, YoutubeKnowledgeChunk
-from sqlalchemy import select, update
-from database import async_session_maker
+from app.repositories.knowledge import (
+    save_chunks_to_db,
+    create_base,
+    save_link_only,
+    update_knowledge_after_langgraph,
+)
+
+# NOTE:
+#   - Knowledge / YoutubeMetadata / YoutubeKnowledgeChunk 모델 직접 사용은
+#     repositories 함수가 추가되는 #2~#4 작업에서 필요해질 예정.
+#   - sqlalchemy.select / update 와 async_session_maker 도 마찬가지.
+#   - 단독 작업 단계에서는 미사용이라 일단 주석 처리. 추가 작업 진입 시 해제.
+# from app.models.knowledge import Knowledge, YoutubeMetadata, YoutubeKnowledgeChunk
+# from sqlalchemy import select, update
+# from database import async_session_maker
 
 logger = get_task_logger(__name__)
 
-# OpenAI 클라이언트
+# OpenAI 클라이언트 — 모듈 로드 시 1회 생성 (싱글톤)
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
-
-
 
 
 # IntelligenceState, VideoOverview는 app/schemas/graph_state.py에서 import
@@ -260,6 +269,30 @@ def run_intelligence_graph_task(self, data: dict):
 
     logger.info(f"[Step 2: LangGraph] 시작 (video_id: {video_id})")
 
+    # ──────────────────────────────────────────
+    # 빈 chunks 가드 (자막 추출/청킹 실패 방어)
+    # ──────────────────────────────────────────
+    # 자막 없는 영상이거나 Step 1이 빈 결과를 흘리면 chunks=[]가 들어옴.
+    # 이대로 LangGraph에 넣으면:
+    #   - summarize_each_chunk: for문 0회 → summarized_chunks=[] (조용히 통과)
+    #   - embed_summaries_node: input=[] 로 OpenAI Embeddings API 호출 → BadRequestError
+    #   - generate_overview: 빈 컨텍스트로 LLM 호출 → 헛소리 또는 fallback 진입
+    # 결과: 그래프는 통과하지만 DB에 의미 없는 garbage가 저장됨.
+    # 따라서 진입 전에 가드를 두고 fallback dict를 직접 리턴해 Step 3으로 넘김.
+    # (status를 FAILED로 마킹하는 진짜 처리는 #4 handle_pipeline_failure 작업에서 보강 예정)
+    if not chunks:
+        logger.warning(
+            f"[Step 2] chunks 비어있음 — LangGraph 스킵 (video_id: {video_id})"
+        )
+        return {
+            "video_id": video_id,
+            "title": f"영상 {video_id}",
+            "full_summary": "자막을 추출할 수 없어 요약을 생성하지 못했습니다.",
+            "category": "미분류",
+            "vector_count": 0,
+            "summarized_chunks": [],
+        }
+
     # LangGraph 실행
     result = intelligence_graph.invoke(
         {
@@ -273,9 +306,27 @@ def run_intelligence_graph_task(self, data: dict):
         }
     )
 
-    # ── 수정 포인트 (유리) ──
-    # Knowledge 테이블에 title, summary, category 업데이트
-    # YoutubeKnowledgeChunk에 벡터 저장
+    # ──────────────────────────────────────────
+    # DB 반영 (#2)
+    # ──────────────────────────────────────────
+    # LangGraph가 만든 결과를 Knowledge + YoutubeKnowledgeChunk 에 UPDATE.
+    #   - title, summary       → Knowledge
+    #   - chunk별 summary      → YoutubeKnowledgeChunk.summary_detail
+    #   - category 이름        → #6 작업(category lookup) 후 보강 예정
+    #   - embeddings           → #7 작업(embedding 컬럼 추가) 후 별도 함수에서 처리 예정
+    try:
+        asyncio.run(
+            update_knowledge_after_langgraph(
+                video_id=video_id,
+                title=result["title"],
+                summary=result["full_summary"],
+                summarized_chunks=result["summarized_chunks"],
+            )
+        )
+    except Exception as e:
+        # DB UPDATE 실패해도 chain 자체는 진행시키고 Step 3 / 핸들러에서 종합 처리.
+        # (재시도 정책은 향후 정교화 — 일단 로그만)
+        logger.error(f"[Step 2] update_knowledge_after_langgraph 실패: {e}")
 
     logger.info(f"[Step 2: LangGraph] 완료 — 제목: {result['title']}")
 
@@ -283,9 +334,9 @@ def run_intelligence_graph_task(self, data: dict):
         "video_id": video_id,
         "title": result["title"],
         "full_summary": result["full_summary"],  # 노션 업로드용
-        "category": result["category"],
+        "category": result["category"],          # #6 작업에서 category_id 매핑에 사용
         "vector_count": len(result["embeddings"]),
-        "summarized_chunks": result["summarized_chunks"],  # 청크별 요약
+        "summarized_chunks": result["summarized_chunks"],
     }
 
 
@@ -317,11 +368,16 @@ def update_pipeline_status(self, data: dict):
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
 def handle_pipeline_failure(self, task_id, video_id: str):
-    """에러 발생 시 Knowledge.status → FAILED"""
+    """에러 발생 시 Knowledge.status → FAILED
+
+    chain의 .on_error()로 연결되어 Step 1/2/3 어느 곳에서 raise되든 호출됨.
+    현재는 로깅만. 실제 DB UPDATE(status=FAILED)는 #4 작업에서 repository
+    함수(mark_failed)를 추가한 뒤 여기서 호출 예정.
+    """
     logger.error(
         f"[Error] 파이프라인 에러 발생 (video_id: {video_id}, task: {task_id})"
     )
-    # run_async(update_pipeline_result("status_update_FAILED", video_id, 1))
+    # TODO(#4): repositories.knowledge.mark_failed(video_id) 호출 추가
 
 
 # ==========================================
@@ -361,28 +417,56 @@ def run_core_pipeline_task(self, video_id: str):
 # ==========================================
 @shared_task(bind=True, name="knowledge.save_link_only")
 def save_link_only_task(self, video_id: str):
-    """
-    SAVE_ONLY 의도: LangGraph 요약을 타지 않고 단순 링크만 저장
-    """
+    """SAVE_ONLY 의도: LangGraph 요약을 타지 않고 단순 링크만 저장."""
     logger.info(
         f"====== 단순 링크 저장 파이프라인 트리거 (video_id: {video_id}) ======"
     )
 
     try:
-        # 1. 메타데이터 (제목 등) 가져오기
+        # 1) 메타데이터 추출
+        #    - YouTubeService.get_metadata 의 반환 키는 video_title / channel_name / duration / video_id.
         yt_service = YouTubeService()
-        metadata = yt_service.get_video_info(video_id)
-        title = metadata.get("title", f"영상 {video_id}")
+        metadata = yt_service.get_metadata(video_id)
+        title = metadata.get("video_title", f"영상 {video_id}")
 
-        # 2. DB 저장 시뮬레이션 (유리님이 채워넣을 부분)
-        # 예: Knowledge.objects.create(video_id=video_id, title=title, status=COMPLETED)
-        # run_async(dummy_async_db_operation("save_link_only_DB", video_id, 1))
+        # 2) DB 저장 (Knowledge + YoutubeMetadata, status=COMPLETED)
+        #    - chunks/embeddings 없음(SAVE_ONLY는 LangGraph 패스).
+        #    - user_id 매핑은 #5 작업에서 추가. 현재는 repository 기본값(user_id=1) 사용.
+        knowledge_id = asyncio.run(save_link_only(video_id, metadata))
 
-        logger.info(f"[단순 저장 완료] 제목: {title}")
-        return {"video_id": video_id, "title": title, "status": "COMPLETED"}
+        logger.info(f"[단순 저장 완료] knowledge_id={knowledge_id}, 제목: {title}")
+        return {
+            "video_id": video_id,
+            "knowledge_id": str(knowledge_id),
+            "title": title,
+            "status": "COMPLETED",
+        }
     except Exception as exc:
         logger.error(f"[단순 저장 에러] {exc}")
-        # run_async(dummy_async_db_operation("status_update_FAILED", video_id, 1))
-        raise self.retry(exc=exc, countdown=5)
+        # TODO(#4): mark_failed(video_id) 호출 추가
+        raise self.retry(exc=exc, countdown=5)== 단순 링크 저장 파이프라인 트리거 (video_id: {video_id}) ======"
+    )
 
-    return "Pipeline Started in Celery Background"
+    try:
+        # 1) 메타데이터 추출
+        #    - YouTubeService.get_metadata 의 반환 키는 video_title / channel_name / duration / video_id.
+        yt_service = YouTubeService()
+        metadata = yt_service.get_metadata(video_id)
+        title = metadata.get("video_title", f"영상 {video_id}")
+
+        # 2) DB 저장 (Knowledge + YoutubeMetadata, status=COMPLETED)
+        #    - chunks/embeddings 없음(SAVE_ONLY는 LangGraph 패스).
+        #    - user_id 매핑은 #5 작업에서 추가. 현재는 repository 기본값(user_id=1) 사용.
+        knowledge_id = asyncio.run(save_link_only(video_id, metadata))
+
+        logger.info(f"[단순 저장 완료] knowledge_id={knowledge_id}, 제목: {title}")
+        return {
+            "video_id": video_id,
+            "knowledge_id": str(knowledge_id),
+            "title": title,
+            "status": "COMPLETED",
+        }
+    except Exception as exc:
+        logger.error(f"[단순 저장 에러] {exc}")
+        # TODO(#4): mark_failed(video_id) 호출 추가
+        raise self.retry(exc=exc, countdown=5)

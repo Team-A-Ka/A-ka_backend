@@ -108,8 +108,15 @@ def process_ai_routing(self, user_id: str, user_message: str):
             video_id = parse_youtube_video_id(detected_url)
             if video_id:
                 logger.info(f"➔ 유튜브 영상 감지 완료 (Video ID: {video_id}). 지식 파이프라인으로 격발합니다.")
-                # 비동기 백그라운드 트리거 — user_id 전파 (DB 매핑용)
-                run_core_pipeline_task(video_id)
+                # ───────────────────────────────────────
+                # task 호출 방식 정리 (#10)
+                # ───────────────────────────────────────
+                # run_core_pipeline_task는 @shared_task로 등록된 Celery task.
+                # 이전 코드는 함수처럼 직접 호출(run_core_pipeline_task(video_id))해서
+                # 큐를 거치지 않고 본 워커에서 동기 실행하는 anti-pattern이었음.
+                # .delay()로 명시 호출하여 별도 워커가 처리하도록 변경.
+                # user_id 전파는 #5(카카오 user_id ↔ User.id 매핑) 작업에서 추가.
+                run_core_pipeline_task.delay(video_id)
             else:
                 logger.warning(
                     f"➔ URL({detected_url})이 파싱되었으나 올바른 유튜브 형식이 아닙니다."
@@ -122,7 +129,9 @@ def process_ai_routing(self, user_id: str, user_message: str):
             video_id = parse_youtube_video_id(detected_url)
             if video_id:
                 logger.info(f"➔ 단순 링크 저장 감지 (Video ID: {video_id}). 가벼운 저장 파이프라인을 격발합니다.")
+                # 함수 안에서 lazy import — 순환 import 방지 + SAVE_ONLY 분기일 때만 모듈 로드
                 from app.services.knowledge_pipeline import save_link_only_task
+                # user_id 전파는 #5 작업에서 추가
                 save_link_only_task.delay(video_id)
             else:
                 logger.warning(f"➔ URL({detected_url})이 파싱되었으나 올바른 유튜브 형식이 아닙니다.")
