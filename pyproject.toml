@@ -5,7 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "torch",      
+    "torch",
     "torchaudio",
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
