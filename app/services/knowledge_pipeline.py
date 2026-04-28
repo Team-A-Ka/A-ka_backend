@@ -61,7 +61,7 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
                         "role": "system",
                         "content": (
                             "너는 유튜브 영상의 텍스트 조각을 요약하는 AI야. "
-                            "핵심 인사이트와 정보 위주로 2~3문장으로 간결하게 요약해. "
+                            "핵심 인사이트와 정보 위주로 2~4문장으로 간결하게 요약해. "
                             "불필요한 인트로, 인사말, 광고 문구는 무시해."
                         ),
                     },
@@ -70,10 +70,10 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
             )
             summary = response.choices[0].message.content.strip()
             if response.usage:
-                logger.info(f"  [토큰 사용량] 청크 요약: {response.usage.total_tokens}")
+                logger.info(f"  [토큰 사용량] 청크 요약: {response.usage.total_tokens}") # llm이 사용중인 토큰 사용량 추적
         except Exception as e:
             logger.warning(f"  청크 {chunk.get('chunk_order', '?')} 요약 실패: {e}")
-            summary = chunk.get("content", "")[:100] + "..."
+            summary = chunk.get("content", "")[:100] + "..." # 100개 청크면 100번 동기로 호출하는 식이라 나중에 비동기로 바꿔야함.
 
         summarized_chunks.append({**chunk, "summary": summary})
         # logger.info(f"  청크 요약 내용 {summarized_chunks}")
@@ -99,7 +99,7 @@ def embed_summaries_node(state: IntelligenceState) -> dict:
     try:
         response = openai_client.embeddings.create(
             model="text-embedding-3-small",
-            input=texts,
+            input=texts, 
         )
         embeddings = [item.embedding for item in response.data]
         if hasattr(response, "usage") and response.usage:
@@ -109,7 +109,7 @@ def embed_summaries_node(state: IntelligenceState) -> dict:
         logger.error(f"  Embedding API 호출 실패: {e}")
 
     return {"embeddings": embeddings}
-
+# 임베딩 파트 한번 호출로 모든 요약문을 벡터로 변환 가능. openai가 배치를 네이티브 지원해서 가능하다고 함. (뭔지 찾아봐야 함)
 
 # ==========================================
 # LangGraph 노드 3: 전체 개요 생성 (노션 업로드용)
@@ -142,7 +142,7 @@ def generate_overview(state: IntelligenceState) -> dict:
                 },
                 {"role": "user", "content": all_summaries},
             ],
-            response_format=VideoOverview,
+            response_format=VideoOverview, # graph_state VideoOVerview 불러와 사용, response_format 으로 넘겨 스키마에 맞춰 답을 만듬
         )
         overview = response.choices[0].message.parsed
         if response.usage:
@@ -158,7 +158,7 @@ def generate_overview(state: IntelligenceState) -> dict:
 
     logger.info(f"[LangGraph: 개요 생성] 완료 — 제목: {title}, 카테고리: {category}")
 
-    return {"title": title, "full_summary": full_summary, "category": category}
+    return {"title": title, "full_summary": full_summary, "category": category} # dict로 리턴하는 거라 노드 하나로 키 3개 리턴
 
 
 # ==========================================
@@ -169,7 +169,7 @@ def build_intelligence_graph():
     LangGraph 그래프 구성:
       summarize_each_chunk → embed_summaries → generate_overview → END
     """
-    graph = StateGraph(IntelligenceState)
+    graph = StateGraph(IntelligenceState) # state 타입 지정
 
     # 노드 등록
     graph.add_node("summarize_each_chunk", summarize_each_chunk)
@@ -185,7 +185,7 @@ def build_intelligence_graph():
     return graph.compile()
 
 
-# 그래프 싱글톤 (Celery 워커 시작 시 1회 빌드)
+# 그래프 싱글톤 (Celery 워커 시작 시 1회 빌드) 매번 빌드 하지 않음, 워커 프로세스 부팅 시 한 번
 intelligence_graph = build_intelligence_graph()
 
 

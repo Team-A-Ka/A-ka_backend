@@ -14,13 +14,13 @@ from pydantic import BaseModel, Field
 # ==========================================
 class IntelligenceState(TypedDict):
     """UPLOAD 파이프라인 — LangGraph 노드 간 공유 상태"""
-    video_id: str
-    chunks: list              # Step 1에서 넘어온 청크 리스트
-    summarized_chunks: list   # 청크별 요약 결과
-    embeddings: list          # 벡터화 결과
-    title: str                # 영상 제목 (개요에서 생성)
-    full_summary: str         # 전체 개요 요약 (노션 업로드용)
-    category: str             # AI가 판별한 카테고리
+    video_id: str             # Step 1 (입력) — 라우터에서 추출한 영상 ID
+    chunks: list              # Step 1 — 자막 추출+청킹 결과 (collect_and_chunk)
+    summarized_chunks: list   # Step 2 노드1 — 청크별 요약 (summarize_each_chunk)
+    embeddings: list          # Step 2 노드2 — 요약문 벡터화 (embed_summaries_node)
+    title: str                # Step 2 노드3 — 영상 제목 (generate_overview)
+    full_summary: str         # Step 2 노드3 — 전체 개요, 노션 업로드용 (generate_overview)
+    category: str             # Step 2 노드3 — AI 판별 카테고리, 11개 중 1 (generate_overview)
 
 
 # ==========================================
@@ -61,3 +61,4 @@ class VideoOverview(BaseModel):
             "새로 생성하는 경우에도 1~5자의 간결한 한 단어로 작성할 것."
         )
     )
+# 카테고리 디폴트 11개 정한 것 보다 카테고리 테이블의 데이터를 조회해서 11개 제한 없이 ai가 생성한것들도 계속 사용가능하게.
