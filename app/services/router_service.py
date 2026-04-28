@@ -14,8 +14,11 @@ logger = get_task_logger(__name__)
 
 # OpenAI 클라이언트 초기화
 if not settings.OPENAI_API_KEY:
-    logger.warning("OPENAI_API_KEY가 설정되지 않았습니다. AI 라우터가 정상 작동하지 않을 수 있습니다.")
+    logger.warning(
+        "OPENAI_API_KEY가 설정되지 않았습니다. AI 라우터가 정상 작동하지 않을 수 있습니다."
+    )
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
 
 # 의도 분류 상수 Enum
 class IntentType(str, Enum):
@@ -27,19 +30,23 @@ class IntentType(str, Enum):
 # OpenAI Structured Output을 위한 Pydantic Schema
 class IntentExtraction(BaseModel):
     intent: IntentType = Field(description="사용자 발화의 핵심 의도")
-    detected_url: str | None = Field(description="사용자 발화에 포함된 URL. 없으면 null")
+    detected_url: str | None = Field(
+        description="사용자 발화에 포함된 URL. 없으면 null"
+    )
+
 
 def parse_youtube_video_id(url: str) -> str | None:
     """유튜브 URL에서 video_id를 추출하는 헬퍼 함수"""
     if not url:
         return None
-    
+
     # 정규식을 사용하여 v=... 또는 youtu.be/... 형태에서 파싱
     regex = r"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^\"&?\/\s]{11})"
     match = re.search(regex, url)
     if match:
         return match.group(1)
     return None
+
 
 @celery_app.task(bind=True, name="router.analyze_intent")
 def process_ai_routing(self, user_id: str, user_message: str):
@@ -50,7 +57,7 @@ def process_ai_routing(self, user_id: str, user_message: str):
     """
     logger.info(f"====== [AI Router] 의도 분석 시작 (User: {user_id}) ======")
     logger.info(f"입력된 텍스트: {user_message}")
-    
+
     intent = "UNKNOWN"
     detected_url = None
 
@@ -102,9 +109,11 @@ def process_ai_routing(self, user_id: str, user_message: str):
             if video_id:
                 logger.info(f"➔ 유튜브 영상 감지 완료 (Video ID: {video_id}). 지식 파이프라인으로 격발합니다.")
                 # 비동기 백그라운드 트리거 — user_id 전파 (DB 매핑용)
-                run_core_pipeline_task(video_id, user_id)
+                run_core_pipeline_task(video_id)
             else:
-                logger.warning(f"➔ URL({detected_url})이 파싱되었으나 올바른 유튜브 형식이 아닙니다.")
+                logger.warning(
+                    f"➔ URL({detected_url})이 파싱되었으나 올바른 유튜브 형식이 아닙니다."
+                )
         else:
             logger.warning("➔ UPLOAD 의도이나 URL이 포함되어 있지 않습니다.")
 
@@ -123,11 +132,12 @@ def process_ai_routing(self, user_id: str, user_message: str):
     elif intent == "SEARCH":
         logger.info(f"➔ 의도 파악: {intent} (RAG 검색 파이프라인 실행)")
         from app.services.search_service import search_and_answer
+
         search_result = search_and_answer(user_id, user_message)
         logger.info(f"➔ 검색 답변 생성 완료 (출처: {search_result['sources']}개)")
-        
+
     else:
         logger.info(f"➔ 의도 파악: {intent} (일반 대화 및 예외 처리 예정)")
         # TODO: 알 수 없음 또는 기본 챗 메시지 반환 호출
-        
+
     return {"intent": intent, "detected_url": detected_url, "user_id": user_id}
