@@ -8,6 +8,10 @@ from app.core.config import settings
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
+from app.repositories.knowledge import save_chunks_to_db, create_base
+from app.models.knowledge import Knowledge, YoutubeMetadata, YoutubeKnowledgeChunk
+from sqlalchemy import select, update
+from database import async_session_maker
 
 logger = get_task_logger(__name__)
 
@@ -15,25 +19,6 @@ logger = get_task_logger(__name__)
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
-# --- Celery에서 async 함수를 실행하기 위한 헬퍼 ---
-def run_async(coro):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        return loop.create_task(coro)
-    else:
-        return asyncio.run(coro)
-
-
-# --- 더미 DB 작업 (실제 DB 로직으로 교체 예정) ---
-async def dummy_async_db_operation(task_name: str, video_id: str, delay: int = 1):
-    logger.info(f"[{task_name}] DB 작업 시뮬레이션 (video_id: {video_id})")
-    await asyncio.sleep(delay)
-    logger.info(f"[{task_name}] DB 작업 완료")
-    return {"status": "success", "task_name": task_name}
 
 
 # IntelligenceState, VideoOverview는 app/schemas/graph_state.py에서 import
@@ -248,12 +233,8 @@ def collect_and_chunk(self, video_id: str):
                 }
             )
 
-        # ── DB 저장 로직 수정 () ──
-        # Knowledge 레코드 생성 (status=PROCESSING)
-        # YoutubeKnowledgeChunk 테이블에 각 청크 저장
-        # 예: Knowledge.objects.create(...) 및 YoutubeKnowledgeChunk.objects.bulk_create(...)
-        # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
-        # run_async(dummy_async_db_operation("collect_and_chunk_DB", video_id, 2))
+        # ── DB 저장 로직
+        asyncio.run(save_chunks_to_db(video_id, metadata, final_chunks))
 
         logger.info(f"첫번째 청크 시작시간: {final_chunks[0]['start_time']}")
         logger.info(f"첫번째 청크 내용: {final_chunks[0]['content'][:50]}")
@@ -295,7 +276,6 @@ def run_intelligence_graph_task(self, data: dict):
     # ── 수정 포인트 (유리) ──
     # Knowledge 테이블에 title, summary, category 업데이트
     # YoutubeKnowledgeChunk에 벡터 저장
-    run_async(dummy_async_db_operation("intelligence_DB_update", video_id, 1))
 
     logger.info(f"[Step 2: LangGraph] 완료 — 제목: {result['title']}")
 
@@ -327,7 +307,6 @@ def update_pipeline_status(self, data: dict):
     # ── 수정 포인트 (유리) ──
     # Knowledge.status = ProcessStatus.COMPLETED 로 DB 업데이트
     # TODO: 노션 업로드 트리거 (full_summary를 노션 페이지에 게시)
-    run_async(dummy_async_db_operation("status_update_COMPLETED", video_id, 1))
 
     logger.info("지식 데이터 처리 완료! (Status -> COMPLETED)")
     return "Pipeline All Done"
@@ -342,19 +321,31 @@ def handle_pipeline_failure(self, task_id, video_id: str):
     logger.error(
         f"[Error] 파이프라인 에러 발생 (video_id: {video_id}, task: {task_id})"
     )
-    run_async(dummy_async_db_operation("status_update_FAILED", video_id, 1))
+    # run_async(update_pipeline_result("status_update_FAILED", video_id, 1))
 
 
 # ==========================================
 # 파이프라인 진입점 — router_service.py에서 호출
 # ==========================================
-def run_core_pipeline_task(video_id: str):
+@shared_task(bind=True, name="knowledge.run_core_pipeline")
+def run_core_pipeline_task(self, video_id: str):
     """
     실행 순서 (순차 chain):
       Step 1 → Step 2 → Step 3
       (수집+청킹) → (LangGraph: 요약→벡터화→개요) → (완료)
     """
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
+    
+    try:
+    # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
+        knowledge_db_id = asyncio.run(create_base(video_id))
+        logger.info(f"DB 초기 레코드 생성 성공: {knowledge_db_id}")
+
+    except Exception as e:
+        logger.error(f"파이프라인 시작 실패 (DB 초기화 에러): {e}")
+        return "Failed to start pipeline: DB Error"
+
+
 
     workflow = chain(
         collect_and_chunk.s(video_id),  # Step 1: 현지/수왕
@@ -385,13 +376,13 @@ def save_link_only_task(self, video_id: str):
 
         # 2. DB 저장 시뮬레이션 (유리님이 채워넣을 부분)
         # 예: Knowledge.objects.create(video_id=video_id, title=title, status=COMPLETED)
-        run_async(dummy_async_db_operation("save_link_only_DB", video_id, 1))
+        # run_async(dummy_async_db_operation("save_link_only_DB", video_id, 1))
 
         logger.info(f"[단순 저장 완료] 제목: {title}")
         return {"video_id": video_id, "title": title, "status": "COMPLETED"}
     except Exception as exc:
         logger.error(f"[단순 저장 에러] {exc}")
-        run_async(dummy_async_db_operation("status_update_FAILED", video_id, 1))
+        # run_async(dummy_async_db_operation("status_update_FAILED", video_id, 1))
         raise self.retry(exc=exc, countdown=5)
 
     return "Pipeline Started in Celery Background"
