@@ -444,29 +444,4 @@ def save_link_only_task(self, video_id: str):
     except Exception as exc:
         logger.error(f"[단순 저장 에러] {exc}")
         # TODO(#4): mark_failed(video_id) 호출 추가
-        raise self.retry(exc=exc, countdown=5)== 단순 링크 저장 파이프라인 트리거 (video_id: {video_id}) ======"
-    )
-
-    try:
-        # 1) 메타데이터 추출
-        #    - YouTubeService.get_metadata 의 반환 키는 video_title / channel_name / duration / video_id.
-        yt_service = YouTubeService()
-        metadata = yt_service.get_metadata(video_id)
-        title = metadata.get("video_title", f"영상 {video_id}")
-
-        # 2) DB 저장 (Knowledge + YoutubeMetadata, status=COMPLETED)
-        #    - chunks/embeddings 없음(SAVE_ONLY는 LangGraph 패스).
-        #    - user_id 매핑은 #5 작업에서 추가. 현재는 repository 기본값(user_id=1) 사용.
-        knowledge_id = asyncio.run(save_link_only(video_id, metadata))
-
-        logger.info(f"[단순 저장 완료] knowledge_id={knowledge_id}, 제목: {title}")
-        return {
-            "video_id": video_id,
-            "knowledge_id": str(knowledge_id),
-            "title": title,
-            "status": "COMPLETED",
-        }
-    except Exception as exc:
-        logger.error(f"[단순 저장 에러] {exc}")
-        # TODO(#4): mark_failed(video_id) 호출 추가
         raise self.retry(exc=exc, countdown=5)
