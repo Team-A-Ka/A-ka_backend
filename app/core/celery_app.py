@@ -4,11 +4,7 @@ from app.core.config import settings
 
 # Celery 앱 인스턴스 생성
 # Redis를 메시지 브로커(Broker)와 결과 저장소(Backend)로 모두 사용
-celery_app = Celery(
-    "aka_tasks",
-    broker=settings.REDIS_URL,
-    backend=settings.REDIS_URL
-)
+celery_app = Celery("aka_tasks", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
 
 # Celery 설정 업데이트
 celery_app.conf.update(
@@ -23,6 +19,6 @@ celery_app.conf.update(
 
 # 생성될 task 모듈들을 명시적으로 임포트
 celery_app.conf.imports = [
-    "app.services.router_service",
-    "app.services.knowledge_pipeline"
+    "app.tasks.router_tasks",
+    "app.tasks.knowledge_tasks",
 ]
