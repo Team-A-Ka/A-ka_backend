@@ -5,11 +5,16 @@ from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
 
+# repositories — Step 1/2/3/실패 단계의 DB 호출 진입점
+# (실제 SQL/모델 조작은 모두 repositories.knowledge 안에 캡슐화됨)
+from app.repositories.knowledge import (
+    save_chunks_to_db,
+    update_knowledge_after_langgraph,
+    mark_completed,
+    mark_failed,
+)
+
 # TODO: Pydantic 기반 State 통일(structured_output)
-from app.repositories.knowledge import save_chunks_to_db, create_base
-from app.models.knowledge import Knowledge, YoutubeMetadata, YoutubeKnowledgeChunk
-from sqlalchemy import select, update
-from database import async_session_maker
 
 logger = get_task_logger(__name__)
 
@@ -84,12 +89,33 @@ class KnowledgePipelineService:
         }
 
     def run_intelligence(self, data: dict):
-        "LangGraph 실행 및 결과 처리"
-        """LangGraph를 실행하여 요약 → 벡터화 → 개요 생성을 순차 수행"""
+        """Step 2 — LangGraph 실행 + 결과 DB 반영.
 
+        흐름:
+          1) 빈 chunks 가드 — Step 1에서 자막 추출 실패 시 LangGraph 스킵 + fallback dict 반환.
+          2) IntelligenceService.run() — LangGraph(요약 → 벡터화 → 개요 생성) 동기 실행.
+          3) update_knowledge_after_langgraph() — Knowledge.title/summary, YoutubeKnowledgeChunk.summary_detail UPDATE.
+             - category_name → category_id 매핑은 향후 작업(#4)에서 추가.
+             - embeddings 저장은 향후 작업(#5: embedding 컬럼 추가) 후 별도 함수에서 처리.
+          4) DB UPDATE 실패해도 chain 자체는 진행 (Step 3 / 핸들러에서 종합 처리).
+        """
         video_id = data.get("video_id")
         chunks = data.get("chunks", [])
         metadata = data.get("metadata")
+
+        if not chunks:
+            logger.warning(
+                f"[Step 2] chunks 비어있음 — LangGraph 스킵 (video_id: {video_id})"
+            )
+            return {
+                "video_id": video_id,
+                "metadata": metadata,
+                "title": f"영상 {video_id}",
+                "full_summary": "자막을 추출할 수 없어 요약을 생성하지 못했습니다.",
+                "category": "미분류",
+                "vector_count": 0,
+                "summarized_chunks": [],
+            }
 
         result = self.intelligence_service.run(
             {
@@ -98,29 +124,57 @@ class KnowledgePipelineService:
                 "metadata": metadata,
             }
         )
-        #### DB ####
 
-        ############
+        # ── DB 반영 (#2): LangGraph 산출물을 Knowledge / YoutubeKnowledgeChunk 에 UPDATE
+        try:
+            asyncio.run(
+                update_knowledge_after_langgraph(
+                    video_id=video_id,
+                    title=result["title"],
+                    summary=result["full_summary"],
+                    summarized_chunks=result["summarized_chunks"],
+                )
+            )
+        except Exception as e:
+            # 부분 실패 — chain은 계속, 핸들러가 종합 처리
+            logger.error(f"[Step 2] update_knowledge_after_langgraph 실패: {e}")
 
         logger.info(f"[Step 2: LangGraph] 완료 — 제목: {result['title']}")
         return result
 
     def publish_pipeline_result(self, data: dict):
-        """상태 업데이트 및 노션 트리거"""
+        """Step 3 — Knowledge.status = COMPLETED + (향후) 노션 업로드 트리거.
+
+        - mark_completed(): 정상 종료 시 status UPDATE. 레코드 없으면 best-effort로 경고만 남김.
+        - 노션 업로드: 별도 작업 (TODO).
+        """
         video_id = data.get("video_id")
         title = data.get("title")
         full_summary = data.get("full_summary")
         # vector_count = data.get("vector_count", 0)
-        # 1. Status 업데이트 (COMPLETED)
-        # TODO: Knowledge.status = ProcessStatus.COMPLETED 로직 작성
-        # 2. 노션 업로드 트리거
-        # self._trigger_notion_upload(video_id)
+
+        # 1) Status 업데이트 (#3)
+        try:
+            asyncio.run(mark_completed(video_id))
+        except Exception as e:
+            logger.error(f"[Step 3] mark_completed 실패: {e}")
+
+        # 2) 노션 업로드 트리거 (TODO: 별도 작업)
+        # self._trigger_notion_upload(video_id, full_summary)
+
         logger.info(
-            f"[Step 3] 완료 video_id={video_id}, title={title}, full_summary={full_summary} "
+            f"[Step 3] 완료 video_id={video_id}, title={title}, full_summary={full_summary}"
         )
         return "Pipeline All Done"
 
     def handle_failure(self, video_id: str, task_id: str):
-        """에러 상태 업데이트"""
+        """파이프라인 실패 시 Knowledge.status = FAILED.
+
+        chain.on_error()로 연결되어 Step 1/2/3 어느 단계 raise든 호출됨.
+        mark_failed는 best-effort — 핸들러 안에서 또 raise되어 연쇄 실패 나는 것을 방지.
+        """
         logger.error(f"[Error] 파이프라인 에러 (video_id: {video_id}, task: {task_id})")
-        # TODO: Knowledge.status = ProcessStatus.FAILED 로직 작성
+        try:
+            asyncio.run(mark_failed(video_id, reason=f"Task {task_id} failed"))
+        except Exception as e:
+            logger.error(f"[Error] mark_failed 호출 실패: {e}")

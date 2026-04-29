@@ -7,12 +7,11 @@
 
 import asyncio
 
-from celery import shared_task
+from celery import shared_task, chain
 from celery.utils.log import get_task_logger
-from app.repositories.knowledge import create_base
+from app.repositories.knowledge import create_base, mark_failed
 from app.services.knowledge_pipeline import KnowledgePipelineService
 from app.services.save_only_service import SaveOnlyService
-from celery import chain
 
 logger = get_task_logger(__name__)
 
@@ -56,16 +55,28 @@ def handle_pipeline_failure_task(self, task_id, video_id: str):
 # ==========================================
 # 단순 링크 저장 (SAVE_ONLY) 진입점
 # ==========================================
-@shared_task(bind=True, name="knowledge.save_link_only")
+@shared_task(bind=True, name="knowledge.save_link_only", max_retries=3)
 def save_link_only_task(self, video_id: str):
     """
-    LangGraph 요약을 타지 않고 단순 링크만 저장
+    LangGraph 요약을 타지 않고 단순 링크만 저장.
+    Celery retry 모두 소진 시 status=FAILED 마킹 후 raise.
     """
     try:
         return save_only_service.save(video_id)
 
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=5)
+        # 재시도 여력 있으면 retry, 없으면 status=FAILED 마킹 후 최종 raise
+        try:
+            raise self.retry(exc=exc, countdown=5)
+        except self.MaxRetriesExceededError:
+            logger.error(
+                f"[SAVE_ONLY] 최대 재시도 초과 — status=FAILED 마킹 (video_id: {video_id})"
+            )
+            try:
+                asyncio.run(mark_failed(video_id, reason=f"SAVE_ONLY 최종 실패: {exc}"))
+            except Exception as e:
+                logger.error(f"[SAVE_ONLY] mark_failed 호출 실패: {e}")
+            raise
 
 
 # ==========================================
