@@ -95,6 +95,8 @@ class ChatCommandService:
             }
 
         logger.info(f"➔ 유튜브 영상 감지 완료 (Video ID: {video_id})")
+        # 중복 처리(사용자 보유 링크 데이터베이스와 비교)
+
         result = run_core_pipeline_task(video_id)
 
         return {
