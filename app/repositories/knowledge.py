@@ -31,7 +31,7 @@ class KnowledgeRepository:
                 original_url=f"https://www.youtube.com/watch?v={video_id}",
                 source_type="YOUTUBE",
                 status="PENDING",
-                category_id=1, #나중에 수정   
+                category_id=1,  # 나중에 수정
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
@@ -57,7 +57,11 @@ class KnowledgeRepository:
             logger.error(f"최초 레코드 생성 실패: {e}")
             raise
 
-async def save_chunks_to_db(video_id: str, metadata:dict, chunks: list):
+    def find_by_user_and_video_id(self, db, user_id: str, video_id: str):
+        return db.query(Knowledge).join(YoutubeMetadata)
+
+
+async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
     async with async_session_maker() as session:
         try:
             result = await session.execute(
@@ -102,11 +106,10 @@ async def save_chunks_to_db(video_id: str, metadata:dict, chunks: list):
                 )
 
             # 3. 청크만 여러 개 저장, ID를 추적하기 위해 리스트에 보관
-            saved_objects = []  
+            saved_objects = []
             for chunk_data in chunks:
                 if not chunk_data:
                     continue
-
 
                 new_chunk = YoutubeKnowledgeChunk(
                     knowledge_id=knowledge_id,
@@ -115,26 +118,27 @@ async def save_chunks_to_db(video_id: str, metadata:dict, chunks: list):
                     start_time=chunk_data.get("start_time", 0),
                 )
                 session.add(new_chunk)
-                saved_objects.append(new_chunk) 
+                saved_objects.append(new_chunk)
 
-            await session.commit() # DB에 실제 ID가 생성되는 부분
-            
+            await session.commit()  # DB에 실제 ID가 생성되는 부분
+
             logger.info(f"[Step 1] 청킹 데이터 DB 저장 완료: {len(chunks)}개")
 
-            #ID가 포함된 명단을 반환 (업데이트할 때 ID가 필요하기 때문)
+            # ID가 포함된 명단을 반환 (업데이트할 때 ID가 필요하기 때문)
             return [
                 {
-                    "id": c.id, 
-                    "chunk_order": c.chunk_order, 
-                    "content": c.content, 
-                    "start_time": c.start_time
-                } for c in saved_objects
+                    "id": c.id,
+                    "chunk_order": c.chunk_order,
+                    "content": c.content,
+                    "start_time": c.start_time,
+                }
+                for c in saved_objects
             ]
 
         except Exception as e:
             await session.rollback()
             logger.error(f"[Step 1] 청킹 데이터 DB 저장 실패: {e}")
-            raise   
+            raise
 
 
 async def create_base(video_id: str):
@@ -142,7 +146,8 @@ async def create_base(video_id: str):
         repo = KnowledgeRepository(session)
         # DB에 PENDING 레코드 생성
         return await repo.create_initial_record(video_id)
-    
+
+
 # DB의 embedding 컬럼에 숫자를 채워 넣는 함수
 async def _update_chunk_embeddings(result_chunks: list):
     """각 Chunk의 ID를 찾아 AI가 만든 벡터 숫자를 업데이트합니다."""
