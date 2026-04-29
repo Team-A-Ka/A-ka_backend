@@ -4,12 +4,9 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
+from app.repositories.knowledge import save_chunks_to_db
 
 # TODO: Pydantic 기반 State 통일(structured_output)
-from app.repositories.knowledge import save_chunks_to_db, create_base
-from app.models.knowledge import Knowledge, YoutubeMetadata, YoutubeKnowledgeChunk
-from sqlalchemy import select, update
-from database import async_session_maker
 
 logger = get_task_logger(__name__)
 

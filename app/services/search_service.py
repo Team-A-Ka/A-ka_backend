@@ -10,9 +10,7 @@ LangGraph 흐름:
 
 import logging
 from openai import OpenAI
-from sqlalchemy import text
 from langgraph.graph import StateGraph, START, END
-from database import SessionLocal
 from app.core.config import settings
 from app.schemas.graph_state import SearchState
 
