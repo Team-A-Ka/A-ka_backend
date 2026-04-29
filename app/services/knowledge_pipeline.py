@@ -91,6 +91,20 @@ class KnowledgePipelineService:
         chunks = data.get("chunks", [])
         metadata = data.get("metadata")
 
+        if not chunks:
+            logger.warning(
+                f"[Step 2] chunks 비어있음 — LangGraph 스킵 (video_id: {video_id})"
+            )
+            return {
+                "video_id": video_id,
+                "metadata": metadata,
+                "title": f"영상 {video_id}",
+                "full_summary": "자막을 추출할 수 없어 요약을 생성하지 못했습니다.",
+                "category": "미분류",
+                "vector_count": 0,
+                "summarized_chunks": [],
+            }
+
         result = self.intelligence_service.run(
             {
                 "video_id": video_id,
