@@ -1,10 +1,7 @@
 import re
 import time
-from enum import Enum
-from pydantic import BaseModel, Field
 from celery.utils.log import get_task_logger
 from openai import OpenAI
-from app.core.celery_app import celery_app
 from app.core.config import settings
 
 from app.schemas.intent import IntentExtraction, IntentType

@@ -4,6 +4,7 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
+from app.repositories.knowledge import save_chunks_to_db
 
 # repositories — Step 1/2/3/실패 단계의 DB 호출 진입점
 # (실제 SQL/모델 조작은 모두 repositories.knowledge 안에 캡슐화됨)
