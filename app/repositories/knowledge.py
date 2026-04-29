@@ -101,22 +101,35 @@ async def save_chunks_to_db(video_id: str, metadata:dict, chunks: list):
                     )
                 )
 
-            # 3. 청크만 여러 개 저장
+            # 3. 청크만 여러 개 저장, ID를 추적하기 위해 리스트에 보관
+            saved_objects = []  
             for chunk_data in chunks:
                 if not chunk_data:
                     continue
 
-                session.add(
-                    YoutubeKnowledgeChunk(
-                        knowledge_id=knowledge_id,
-                        chunk_order=chunk_data.get("chunk_order", 0),
-                        content=chunk_data.get("content", ""),
-                        start_time=chunk_data.get("start_time", 0),
-                    )
-                )
 
-            await session.commit()
+                new_chunk = YoutubeKnowledgeChunk(
+                    knowledge_id=knowledge_id,
+                    chunk_order=chunk_data.get("chunk_order", 0),
+                    content=chunk_data.get("content", ""),
+                    start_time=chunk_data.get("start_time", 0),
+                )
+                session.add(new_chunk)
+                saved_objects.append(new_chunk) 
+
+            await session.commit() # DB에 실제 ID가 생성되는 부분
+            
             logger.info(f"[Step 1] 청킹 데이터 DB 저장 완료: {len(chunks)}개")
+
+            #ID가 포함된 명단을 반환 (업데이트할 때 ID가 필요하기 때문)
+            return [
+                {
+                    "id": c.id, 
+                    "chunk_order": c.chunk_order, 
+                    "content": c.content, 
+                    "start_time": c.start_time
+                } for c in saved_objects
+            ]
 
         except Exception as e:
             await session.rollback()
@@ -129,6 +142,22 @@ async def create_base(video_id: str):
         repo = KnowledgeRepository(session)
         # DB에 PENDING 레코드 생성
         return await repo.create_initial_record(video_id)
+    
+# DB의 embedding 컬럼에 숫자를 채워 넣는 함수
+async def _update_chunk_embeddings(result_chunks: list):
+    """각 Chunk의 ID를 찾아 AI가 만든 벡터 숫자를 업데이트합니다."""
+    async with async_session_maker() as session:
+        async with session.begin():
+            for chunk_data in result_chunks:
+                # AI가 돌려준 데이터에 id와 벡터값(embedding)이 있을 때만 작동
+                if "id" in chunk_data and "embedding" in chunk_data:
+                    stmt = (
+                        update(YoutubeKnowledgeChunk)
+                        .where(YoutubeKnowledgeChunk.id == chunk_data["id"])
+                        .values(embedding=chunk_data["embedding"])
+                    )
+                    await session.execute(stmt)
+        await session.commit()
 
 
 # ==========================================

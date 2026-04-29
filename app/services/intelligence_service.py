@@ -89,6 +89,10 @@ def embed_summaries_node(state: IntelligenceState) -> dict:
             input=texts,
         )
         embeddings = [item.embedding for item in response.data]
+        for i, chunk in enumerate(summarized_chunks):
+            if i < len(embeddings):
+                # 각 청크 딕셔너리에 'embedding' 키를 새로 만들어서 숫자 리스트를 넣기
+                chunk["embedding"] = embeddings[i]
         if hasattr(response, "usage") and response.usage:
             logger.info(f"  [토큰 사용량] 임베딩: {response.usage.total_tokens}")
         logger.info(f"  벡터 {len(embeddings)}개 생성 (차원: {len(embeddings[0])})")
