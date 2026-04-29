@@ -4,7 +4,9 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
-from app.repositories.knowledge import save_chunks_to_db
+from app.repositories.knowledge import _update_chunk_embeddings
+
+
 
 # repositories — Step 1/2/3/실패 단계의 DB 호출 진입점
 # (실제 SQL/모델 조작은 모두 repositories.knowledge 안에 캡슐화됨)
@@ -78,15 +80,14 @@ class KnowledgePipelineService:
             )
 
         # ── DB 저장 로직
-        asyncio.run(save_chunks_to_db(video_id, metadata, final_chunks))
+        # DB에 저장된 후 'ID(UUID)'가 채워진 데이터를 변수에 담기
+        saved_chunks = run_async(save_chunks_to_db(video_id, metadata, final_chunks))
 
-        logger.info(f"첫번째 청크 시작시간: {final_chunks[0]['start_time']}")
-        logger.info(f"첫번째 청크 내용: {final_chunks[0]['content'][:50]}")
-
+        # 마지막 return에서 final_chunks 대신 'ID가 포함된' saved_chunks를 돌려주기
         return {
             "video_id": video_id,
             "metadata": metadata,
-            "chunks": final_chunks,
+            "chunks": saved_chunks,
         }
 
     def run_intelligence(self, data: dict):
@@ -139,6 +140,16 @@ class KnowledgePipelineService:
         except Exception as e:
             # 부분 실패 — chain은 계속, 핸들러가 종합 처리
             logger.error(f"[Step 2] update_knowledge_after_langgraph 실패: {e}")
+
+        #### DB ####
+        # 생성된 벡터(임베딩)를 DB에 집어넣기
+        if "summarized_chunks" in result:
+            logger.info(
+                f"DB에 {len(result['summarized_chunks'])}개의 벡터 데이터를 저장합니다."
+            )
+            # 아래에 새로 만든 비동기 함수를 호출
+            run_async(_update_chunk_embeddings(result["summarized_chunks"]))
+        ############
 
         logger.info(f"[Step 2: LangGraph] 완료 — 제목: {result['title']}")
         return result
