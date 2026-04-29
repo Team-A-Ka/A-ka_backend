@@ -4,7 +4,18 @@ from celery import shared_task, chain
 from celery.utils.log import get_task_logger
 from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
+<<<<<<< Updated upstream
 from app.core.config import settings
+=======
+from app.core.celery_app import celery_app
+from app.core.config import settings
+from database import SessionLocal
+from app.services.notion_connection_service import (
+    create_summary_page_for_user,
+    resolve_internal_user_id,
+)
+from app.services.intelligence_service import IntelligenceService
+>>>>>>> Stashed changes
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
@@ -260,6 +271,7 @@ def collect_and_chunk(self, video_id: str):
 
         return {
             "video_id": video_id,
+            "user_id": user_id,
             "metadata": metadata,
             "chunks": final_chunks,
         }
@@ -277,7 +289,22 @@ def run_intelligence_graph_task(self, data: dict):
     video_id = data.get("video_id")
     chunks = data.get("chunks", [])
 
+<<<<<<< Updated upstream
     logger.info(f"[Step 2: LangGraph] 시작 (video_id: {video_id})")
+=======
+        video_id = data.get("video_id")
+        chunks = data.get("chunks", [])
+        metadata = data.get("metadata")
+
+        result = self.intelligence_service.run(
+            {
+                "video_id": video_id,
+                "chunks": chunks,
+                "metadata": metadata,
+            }
+        )
+        #### DB ####
+>>>>>>> Stashed changes
 
     # LangGraph 실행
     result = intelligence_graph.invoke(
@@ -292,6 +319,7 @@ def run_intelligence_graph_task(self, data: dict):
         }
     )
 
+<<<<<<< Updated upstream
     # ── 수정 포인트 (유리) ──
     # Knowledge 테이블에 title, summary, category 업데이트
     # YoutubeKnowledgeChunk에 벡터 저장
@@ -332,10 +360,45 @@ def update_pipeline_status(self, data: dict):
     logger.info("지식 데이터 처리 완료! (Status -> COMPLETED)")
     return "Pipeline All Done"
 
+=======
+    logger.info(f"[Step 2: LangGraph] 완료 — 제목: {result['title']}")
+            return result
+
+    def publish_pipeline_result(self, data: dict):
+        """상태 업데이트 및 노션 트리거"""
+        video_id = data.get("video_id")
+        title = data.get("title")
+        full_summary = data.get("full_summary")
+        # vector_count = data.get("vector_count", 0)
+        # 1. Status 업데이트 (COMPLETED)
+        # TODO: Knowledge.status = ProcessStatus.COMPLETED 로직 작성
+        # 2. 노션 업로드 트리거
+        # self._trigger_notion_upload(video_id)
+        run_async(dummy_async_db_operation("status_update_COMPLETED", video_id, 1))
+        notion_page = None
+        if user_id:
+            notion_page = save_summary_to_user_notion(
+                user_id=user_id,
+                video_id=video_id,
+                title=title,
+                full_summary=full_summary,
+            )
+
+        logger.info("지식 데이터 처리 완료! (Status -> COMPLETED)")
+        return {
+            "status": "Pipeline All Done",
+            "video_id": video_id,
+            "notion_page": notion_page,
+        }
+        logger.info("지식 데이터 처리 완료! (Status -> COMPLETED)")
+        return "Pipeline All Done"
+
+>>>>>>> Stashed changes
 
 # ==========================================
 # 에러 핸들러
 # ==========================================
+<<<<<<< Updated upstream
 @shared_task(bind=True, name="knowledge.handle_failure")
 def handle_pipeline_failure(self, task_id, video_id: str):
     """에러 발생 시 Knowledge.status → FAILED"""
@@ -395,3 +458,44 @@ def save_link_only_task(self, video_id: str):
         raise self.retry(exc=exc, countdown=5)
 
     return "Pipeline Started in Celery Background"
+=======
+def handle_failure(self, video_id: str, task_id: str):
+        """에러 상태 업데이트"""
+        logger.error(f"[Error] 파이프라인 에러 (video_id: {video_id}, task: {task_id})")
+        # TODO: Knowledge.status = ProcessStatus.FAILED 로직 작성
+
+
+def save_summary_to_user_notion(
+    user_id: str | int,
+    video_id: str,
+    title: str,
+    full_summary: str,
+) -> dict | None:
+    db = SessionLocal()
+    try:
+        internal_user_id = resolve_internal_user_id(db, user_id)
+        if internal_user_id is None:
+            logger.warning(f"[Notion] user_id={user_id} could not be resolved.")
+            return None
+
+        page = create_summary_page_for_user(
+            db=db,
+            user_id=internal_user_id,
+            title=title or f"YouTube summary {video_id}",
+            summary=full_summary or "Summary is empty.",
+            source_url=f"https://www.youtube.com/watch?v={video_id}",
+        )
+        if page is None:
+            logger.info(
+                f"[Notion] user_id={internal_user_id} has no ready Notion connection."
+            )
+            return None
+
+        logger.info(f"[Notion] Summary page saved: {page.get('url')}")
+        return {"id": page.get("id"), "url": page.get("url")}
+    except Exception as exc:
+        logger.warning(f"[Notion] Failed to save summary page: {exc}")
+        return None
+    finally:
+        db.close()
+>>>>>>> Stashed changes

@@ -6,6 +6,7 @@ from database import Base
 
 if TYPE_CHECKING:
     from .knowledge import Knowledge
+    from .notion import NotionConnection
 
 class User(Base):
     __tablename__ = "user"
@@ -21,6 +22,12 @@ class User(Base):
     knowledges: Mapped[List["Knowledge"]] = relationship("Knowledge", back_populates="user")
     channel_identities: Mapped[List["UserChannelIdentity"]] = relationship(
         "UserChannelIdentity", back_populates="user", cascade="all, delete-orphan"
+    )
+    notion_connection: Mapped["NotionConnection | None"] = relationship(
+        "NotionConnection",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
     )
 
 class UserChannelIdentity(Base):
