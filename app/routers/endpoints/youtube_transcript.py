@@ -41,7 +41,7 @@ _CHUNK_REQUEST_EXAMPLE = {
 
 @router.post("/transcript/chunk", response_model=list[TranscriptChunkResponse])
 def chunk_transcript(
-    body: TranscriptChunkRequest = Body(..., example=_CHUNK_REQUEST_EXAMPLE),
+    body: TranscriptChunkRequest = Body(..., examples=[_CHUNK_REQUEST_EXAMPLE]),
 ) -> list[dict]:
     """``get_transcript``와 동일하게 자막을 가져온 뒤 정제하고 ``strategy``에 맞게 청킹한다."""
     raw = youtube_service.get_transcript(body.video_id)
