@@ -100,7 +100,8 @@ def test_phase3_task_apply():
     print("Phase 3: save_link_only_task.apply() (동기 실행)")
     print("=" * 60)
 
-    from app.services.knowledge_pipeline import save_link_only_task
+    # 리팩토링 후: task는 app.tasks.knowledge_tasks 로 이동
+    from app.tasks.knowledge_tasks import save_link_only_task
 
     video_id = "3n5IpwV79Gs"
 

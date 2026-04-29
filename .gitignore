@@ -377,3 +377,4 @@ docs/
 docs/
 *.md
 !README.md
+test_db_diag*.py
