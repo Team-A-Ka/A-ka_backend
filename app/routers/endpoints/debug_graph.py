@@ -1,9 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
-from app.services.knowledge_pipeline import intelligence_graph
+from app.services.intelligence_service import intelligence_graph
 from app.services.search_service import search_graph
 
 router = APIRouter()
+
 
 def get_mermaid_html(title: str, mermaid_code: str) -> str:
     """Mermaid 텍스트를 입력받아 브라우저에서 그려주는 HTML 템플릿 반환"""
@@ -49,6 +50,7 @@ def get_mermaid_html(title: str, mermaid_code: str) -> str:
     </html>
     """
 
+
 @router.get("/{graph_name}", response_class=HTMLResponse)
 def render_graph(graph_name: str):
     """
@@ -58,15 +60,15 @@ def render_graph(graph_name: str):
         # 지식/업로드 파이프라인 그래프
         code = intelligence_graph.get_graph().draw_mermaid()
         return get_mermaid_html("지식 업로드 파이프라인 (knowledge_pipeline.py)", code)
-        
+
     elif graph_name == "search":
         # RAG 검색 파이프라인 그래프
         code = search_graph.get_graph().draw_mermaid()
         return get_mermaid_html("검색 파이프라인 (search_service.py)", code)
-        
+
     else:
         # 나중에 새로운 LangGraph가 추가되면 elif로 추가해주시면 됩니다!
         raise HTTPException(
-            status_code=404, 
-            detail=f"그래프를 찾을 수 없습니다: '{graph_name}'. 지원되는 그래프: 'knowledge', 'search'"
+            status_code=404,
+            detail=f"그래프를 찾을 수 없습니다: '{graph_name}'. 지원되는 그래프: 'knowledge', 'search'",
         )
