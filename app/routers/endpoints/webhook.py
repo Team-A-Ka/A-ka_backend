@@ -1,17 +1,20 @@
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 from app.schemas.kakao import (
+    ChatRequest,
     KakaoWebhookRequest,
     KakaoWebhookResponse,
     Template,
     Output,
     SimpleText,
 )
+from typing import Annotated
+from app.models.user import User
+from app.core.auth_dependencies import get_current_user
 
 # AI 라우터 Celery Task 임포트
 from app.tasks.router_tasks import process_ai_routing_task
 
-router = APIRouter()
-
+router = APIRouter()             
 
 def trigger_ai_router(user_id: str, user_message: str):
     """Celery 큐에 밀어넣는 작업 자체도 백그라운드에서 처리하여 5초 응답을 완벽히 보장합니다."""
@@ -20,6 +23,18 @@ def trigger_ai_router(user_id: str, user_message: str):
     except Exception as e:
         print(f"⚠️ [경고] 워커 큐(Redis) 전송 실패. 백그라운드 작업이 지연됩니다: {e}")
 
+@router.post("/chat")
+async def chat(
+    request: ChatRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    background_tasks: BackgroundTasks
+
+):
+    user_id = current_user.id
+    user_message = request.message
+
+    background_tasks.add_task(trigger_ai_router, user_id, user_message)
+    return 0      
 
 @router.post("/chat/webhook", response_model=KakaoWebhookResponse)
 async def kakao_webhook(
