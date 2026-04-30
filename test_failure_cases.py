@@ -59,44 +59,32 @@ def test_scenario_1_invalid_video_id():
 #       fallback dict 의 title/category 가 미분류, vector_count=0
 # ======================================================
 def test_scenario_2_empty_chunks_guard():
-    banner("시나리오 2: 빈 chunks → LangGraph 스킵 + fallback")
+    banner("시나리오 2: 빈 chunks → 파이프라인 중단 및 에러 발생")
 
     from app.services.knowledge_pipeline import KnowledgePipelineService
 
     service = KnowledgePipelineService()
-    result = service.run_intelligence(
-        {
-            "video_id": "EMPTY_CHUNKS_TEST",
-            "chunks": [],          # 핵심
-            "metadata": {"video_title": "test"},
-        }
-    )
-
-    expected = {
-        "title": "영상 EMPTY_CHUNKS_TEST",
-        "category": "미분류",
-        "vector_count": 0,
-        "summarized_chunks": [],
-    }
-
-    fails = []
-    for k, v in expected.items():
-        actual = result.get(k)
-        if actual != v:
-            fails.append(f"   key={k}: expected={v}, actual={actual}")
-
-    if fails:
-        print(f"❌ fallback dict 일부 키 불일치:")
-        for line in fails:
-            print(line)
+    
+    try:
+        service.run_intelligence(
+            {
+                "video_id": "EMPTY_CHUNKS_TEST",
+                "chunks": [],          # 핵심
+                "metadata": {"video_title": "test"},
+            }
+        )
+        print("❌ 예상과 달리 예외가 발생하지 않고 성공했습니다.")
         return False
-
-    print(f"✅ 빈 chunks 가드 정상 동작")
-    print(f"   title         : {result['title']}")
-    print(f"   category      : {result['category']}")
-    print(f"   vector_count  : {result['vector_count']}")
-    print(f"   summarized_chunks 길이: {len(result['summarized_chunks'])}")
-    return True
+    except ValueError as e:
+        if "자막 추출 실패" in str(e):
+            print(f"✅ 기대대로 ValueError 발생: {e}")
+            return True
+        else:
+            print(f"⚠️ ValueError는 발생했으나 메시지가 다릅니다: {e}")
+            return False
+    except Exception as e:
+        print(f"❌ 기대한 ValueError가 아닌 다른 예외 발생: {type(e).__name__}: {e}")
+        return False
 
 
 # ======================================================
