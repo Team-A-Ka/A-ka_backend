@@ -383,7 +383,10 @@ async def mark_failed(video_id: str, reason: str = ""):
 
             await session.execute(
                 update(Knowledge)
-                .where(Knowledge.id == knowledge_id)
+                .where(
+                    Knowledge.id == knowledge_id,
+                    Knowledge.status != ProcessStatus.FAILED,
+                )
                 .values(status=ProcessStatus.FAILED)
             )
             await session.commit()

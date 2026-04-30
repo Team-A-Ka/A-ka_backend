@@ -34,9 +34,7 @@ class ChatCommandService:
             "user_id": user_id,
         }
 
-    def analyze_intent(
-        self, user_message: str
-    ) -> tuple[str, str | None]:  # user_id는....
+    def analyze_intent(self, user_message: str) -> tuple[str, str | None]:
         intent = IntentType.UNKNOWN.value
         detected_url = None
 
@@ -145,8 +143,7 @@ class ChatCommandService:
             "result": search_result,
         }
 
-    #     logger.info(f"➔ 의도 파악: {intent} (일반 대화 및 예외 처리 예정)")
-    # # TODO: 알 수 없음 또는 기본 챗 메시지 반환 호출
+    # TODO: 알 수 없음 또는 기본 챗 메시지 반환 로직 추후 구현
 
     @staticmethod
     def parse_youtube_video_id(url: str) -> str | None:
