@@ -141,11 +141,11 @@ async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
             raise
 
 
-async def create_base(video_id: str):
+async def create_base(video_id: str, user_id: str):
     async with async_session_maker() as session:
         repo = KnowledgeRepository(session)
         # DB에 PENDING 레코드 생성
-        return await repo.create_initial_record(video_id)
+        return await repo.create_initial_record(video_id, user_id)
 
 
 # DB의 embedding 컬럼에 숫자를 채워 넣는 함수
