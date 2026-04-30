@@ -47,6 +47,10 @@ def vectorize_query(state: SearchState) -> dict:
 # 검색 결과 상한 — 너무 많이 가져오면 RAG 컨텍스트 비용↑·답변 품질↓
 SEARCH_TOP_K = 5
 
+# 코사인 거리 임계값 — 0(완전 동일) ~ 2(완전 반대). 0.7 초과 시 무관련 청크로 판단해 제거.
+# RAG 답변 품질 보고 올리거나 낮춰서 튜닝 가능.
+DISTANCE_THRESHOLD = 0.7
+
 # 카카오 user_id(string) → User.id(int) 매핑은 task #1 (auth_service 합의 후)에서 보강 예정.
 # 그 전까지는 시드된 임시 user.id=1을 사용.
 TEMP_USER_ID = 1
@@ -84,14 +88,16 @@ def search_chunks(state: SearchState) -> dict:
                 JOIN knowledge k ON kc.knowledge_id = k.id
                 WHERE k.user_id = :user_id
                   AND kc.embedding IS NOT NULL
+                  AND kc.embedding <=> CAST(:query_vec AS vector) < :threshold
                 ORDER BY kc.embedding <=> CAST(:query_vec AS vector)
                 LIMIT :top_k
                 """
             ),
             {
                 "query_vec": vector_str,
-                "user_id": TEMP_USER_ID,  # task #1 매핑 후 진짜 user.id로 교체
+                "user_id": TEMP_USER_ID,
                 "top_k": SEARCH_TOP_K,
+                "threshold": DISTANCE_THRESHOLD,
             },
         )
         chunks = [dict(row._mapping) for row in result]
