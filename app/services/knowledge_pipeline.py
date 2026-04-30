@@ -38,6 +38,8 @@ def run_async(coro):
 class KnowledgePipelineService:
     def __init__(self):
         self.youtube_service = YouTubeService()
+        # TODO(향후 고도화): 매 태스크마다 IntelligenceService 인스턴스를 새로 생성하는 것은 비효율적임.
+        # 모듈 레벨 싱글톤 패턴 또는 의존성 주입(DI) 방식으로 변경하여 재사용성 및 메모리 효율 개선 필요.
         self.intelligence_service = IntelligenceService()
 
     def collect_and_chunk(self, video_id: str):
@@ -107,17 +109,11 @@ class KnowledgePipelineService:
 
         if not chunks:
             logger.warning(
-                f"[Step 2] chunks 비어있음 — LangGraph 스킵 (video_id: {video_id})"
+                f"[Step 2] chunks 비어있음 — 파이프라인 중단 (video_id: {video_id})"
             )
-            return {
-                "video_id": video_id,
-                "metadata": metadata,
-                "title": f"영상 {video_id}",
-                "full_summary": "자막을 추출할 수 없어 요약을 생성하지 못했습니다.",
-                "category": "미분류",
-                "vector_count": 0,
-                "summarized_chunks": [],
-            }
+            # 빈 chunks는 요약 불가 → FAILED 상태로 확정 짓고 에러를 던져 체인을 끊음
+            run_async(mark_failed(video_id, reason="자막을 추출할 수 없어 요약을 생성하지 못했습니다."))
+            raise ValueError(f"자막 추출 실패 (빈 chunks) - video_id: {video_id}")
 
         result = self.intelligence_service.run(
             {
