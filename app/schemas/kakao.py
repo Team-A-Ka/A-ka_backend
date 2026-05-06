@@ -14,6 +14,9 @@ class KakaoAction(BaseModel):
     name: str
     detailParams: Optional[Dict[str, Any]] = None
 
+class ChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="사용자가 보낸 채팅 내용")
+
 class KakaoWebhookRequest(BaseModel):
     userRequest: KakaoUserRequest
     action: KakaoAction
