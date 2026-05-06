@@ -61,7 +61,7 @@ def get_or_create_kakao_user(
         return identity.user
 
     user = User(
-        user_name=f"kakao_{kakao_user_id}",
+        user_name=None,
         is_active=True,
     )
     db.add(user)
