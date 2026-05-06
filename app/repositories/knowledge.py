@@ -141,7 +141,7 @@ async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
             raise
 
 
-async def create_base(video_id: str, user_id: str):
+async def create_base(video_id: str, user_id: int):
     async with async_session_maker() as session:
         repo = KnowledgeRepository(session)
         # DB에 PENDING 레코드 생성
