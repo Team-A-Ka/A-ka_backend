@@ -138,7 +138,7 @@ async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
             raise
 
 
-async def create_base(video_id: str, user_id: int = 1):
+async def create_base(video_id: str, user_id: int):
     async with async_session_maker() as session:
         repo = KnowledgeRepository(session)
         return await repo.create_initial_record(video_id, user_id)

@@ -15,9 +15,9 @@ openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 class ChatCommandService:
-    def process(self, user_id: str | int, user_message: str) -> dict:
-        logger.info(f"====== [AI Router] Analyze intent (user={user_id}) ======")
-        logger.info(f"Input: {user_message}")
+    def process(self, user_id: int, user_message: str) -> dict:
+        logger.info(f"====== [AI Router] 의도 분석 시작 (User: {user_id}) ======")
+        logger.info(f"입력된 텍스트: {user_message}")
         intent, detected_url = self.analyze_intent(user_message)
 
         if intent == IntentType.UPLOAD.value:
@@ -74,7 +74,7 @@ class ChatCommandService:
 
         return intent, detected_url
 
-    def handle_upload(self, user_id: str | int, detected_url: str | None) -> dict:
+    def handle_upload(self, user_id: int, detected_url: str | None) -> dict:
         video_id = self.parse_youtube_video_id(detected_url)
         if not video_id:
             return {
@@ -92,7 +92,7 @@ class ChatCommandService:
             "pipeline": result,
         }
 
-    def handle_save_only(self, user_id: str | int, detected_url: str | None) -> dict:
+    def handle_save_only(self, user_id: int, detected_url: str | None) -> dict:
         video_id = self.parse_youtube_video_id(detected_url)
         if not video_id:
             return {
@@ -111,7 +111,13 @@ class ChatCommandService:
             "status": "QUEUED",
         }
 
-    def handle_search(self, user_id: str | int, user_message: str) -> dict:
+    def handle_search(
+        self,
+        user_id: int,
+        user_message: str,
+    ) -> dict:
+        logger.info("➔ SEARCH 의도 감지. RAG 검색 파이프라인 실행")
+
         search_result = search_and_answer(user_id, user_message)
         return {
             "intent": "SEARCH",

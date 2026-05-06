@@ -91,7 +91,7 @@ def run_core_pipeline_task(video_id: str, user_id: int):
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
     try:
         # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
-        knowledge_db_id = asyncio.run(create_base(video_id,user_id))
+        knowledge_db_id = asyncio.run(create_base(video_id, user_id))
         logger.info(f"DB 초기 레코드 생성 성공: {knowledge_db_id}")
 
     except Exception as e:
