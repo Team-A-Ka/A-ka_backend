@@ -25,8 +25,8 @@ save_only_service = SaveOnlyService()
 # Step 1: 수집 + 청킹
 # ==========================================
 @celery_app.task(bind=True, name="knowledge.collect_and_chunk")
-def collect_and_chunk_task(self, video_id: str):
-    return knowledge_pipeline_service.collect_and_chunk(video_id)
+def collect_and_chunk_task(self, video_id: str, user_id: int):
+    return knowledge_pipeline_service.collect_and_chunk(video_id, user_id)
 
 
 # ==========================================
@@ -117,7 +117,7 @@ def run_core_pipeline_task(video_id: str, user_id: int):
         return "Failed to start pipeline: DB Error"
 
     workflow = chain(
-        collect_and_chunk_task.s(video_id),  # Step 1: 현지/수왕
+        collect_and_chunk_task.s(video_id, user_id),  # Step 1: 현지/수왕
         run_intelligence_graph_task.s(),  # Step 2: 채훈 (LangGraph)
         update_pipeline_status_task.s(),  # Step 3: 완료
     ).on_error(handle_pipeline_failure_task.s(video_id))
