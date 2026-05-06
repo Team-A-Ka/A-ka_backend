@@ -15,10 +15,12 @@ dependencies = [
     "fastapi[standard]>=0.135.3",
     "ffmpeg>=1.4",
     "ffprobe>=0.5",
+    "greenlet>=3.4.0",
     "isodate>=0.7.2",
     "langgraph>=1.1.9",
     "openai>=2.31.0",
     "openai-whisper>=20250625",
+    "pgvector>=0.4.2",
     "psycopg2-binary>=2.9.11",
     "pyjwt>=2.12.1",
     "python-dotenv>=1.2.2",
@@ -40,7 +42,7 @@ dev = [
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
-explicit = true  # 특정 패키지에만 이 인덱스를 사용하도록 설정
+explicit = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }

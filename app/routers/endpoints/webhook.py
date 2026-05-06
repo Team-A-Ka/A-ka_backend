@@ -1,12 +1,17 @@
+from typing import Annotated
+
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
+
+from app.core.auth_dependencies import get_current_user
+from app.models.user import User
 from app.schemas.kakao import (
     ChatRequest,
     KakaoWebhookRequest,
     KakaoWebhookResponse,
-    Template,
     Output,
     SimpleText,
+    Template,
 )
 from typing import Annotated
 from app.models.user import User
@@ -70,7 +75,6 @@ async def kakao_webhook(
     # 2. Celery 백그라운드 워커로 작업 이관을 통지 (비동기 위임)
     background_tasks.add_task(trigger_ai_router, internal_user_id, user_message)
 
-    # 3. 즉시 카카오 Response 반환 (5초 타임아웃 완벽 방어)
     return KakaoWebhookResponse(
         version="2.0",
         template=Template(

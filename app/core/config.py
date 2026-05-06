@@ -35,7 +35,13 @@ class Settings(BaseSettings):
     # LangGraph에서 활용할 OpenAI 통합과 외부 요약 적재용 Notion API 키입니다.
     OPENAI_API_KEY: str = ""
     YOUTUBE_API_KEY: str = ""
-    NOTION_API_KEY: str = ""
+    NOTION_VERSION: str = "2026-03-11"
+    NOTION_OAUTH_CLIENT_ID: str = ""
+    NOTION_OAUTH_CLIENT_SECRET: str = ""
+    NOTION_OAUTH_REDIRECT_URI: str = (
+        "http://127.0.0.1:8000/api/v1/notion/oauth/callback"
+    )
+    NOTION_OAUTH_AUTH_URL: str = "https://api.notion.com/v1/oauth/authorize"
 
     class Config:
         env_file = ".env"

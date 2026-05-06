@@ -14,6 +14,7 @@ from database import Base
 
 if TYPE_CHECKING:
     from .knowledge import Knowledge
+    from .notion import NotionConnection
 
 
 class User(Base):
@@ -34,6 +35,12 @@ class User(Base):
     )
     channel_identities: Mapped[List["UserChannelIdentity"]] = relationship(
         "UserChannelIdentity", back_populates="user", cascade="all, delete-orphan"
+    )
+    notion_connection: Mapped["NotionConnection | None"] = relationship(
+        "NotionConnection",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
     )
 
 

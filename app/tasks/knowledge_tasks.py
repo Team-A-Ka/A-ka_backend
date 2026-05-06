@@ -7,7 +7,8 @@
 
 import asyncio
 
-from celery import shared_task, chain
+from celery import chain
+from app.core.celery_app import celery_app
 from celery.utils.log import get_task_logger
 from app.repositories.knowledge import create_base, mark_failed
 from app.services.knowledge_pipeline import KnowledgePipelineService
@@ -22,7 +23,7 @@ save_only_service = SaveOnlyService()
 # ==========================================
 # Step 1: 수집 + 청킹
 # ==========================================
-@shared_task(bind=True, name="knowledge.collect_and_chunk")
+@celery_app.task(bind=True, name="knowledge.collect_and_chunk")
 def collect_and_chunk_task(self, video_id: str):
     return knowledge_pipeline_service.collect_and_chunk(video_id)
 
