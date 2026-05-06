@@ -3,13 +3,16 @@
 애플리케이션 전체에서 사용되는 환경변수를 Pydantic Settings를 사용해 관리합니다.
 .env 파일에서 값을 읽어오거나 네이티브 환경변수를 우선적으로 적용합니다.
 """
+
 from pydantic_settings import BaseSettings
+
 
 class Settings(BaseSettings):
     """
     어플리케이션 구동에 필요한 필수 설정값들을 정의하는 클래스입니다.
     타입 힌트를 기반으로 설정값의 타입 검증이 자동으로 이루어집니다.
     """
+
     PROJECT_NAME: str = "A-Ka Backend"
 
     # Auth
@@ -24,7 +27,8 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "aka_db"
-    DATABASE_URL: str = ""
+
+    DATABASE_URL: str | None = None
 
     # Redis / Celery
     # 백그라운드 큐 통신을 위한 로컬 Redis 브로커 주소입니다.
@@ -47,6 +51,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         case_sensitive = True
         extra = "ignore"
+
 
 # 싱글톤처럼 애플리케이션 어디서든 import settings 하여 접근 가능하게 인스턴스화합니다.
 settings = Settings()

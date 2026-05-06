@@ -20,6 +20,10 @@ from app.services.notion_connection_service import (
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
+from database import async_session_maker
+from app.repositories.knowledge import KnowledgeRepository
+
+# TODO: Pydantic 기반 State 통일(structured_output)
 from database import SessionLocal
 
 logger = get_task_logger(__name__)
@@ -224,7 +228,7 @@ def save_summary_to_user_notion(
                 f"[Notion] user_id={internal_user_id} has no ready Notion connection."
             )
             return None
-
+        
         logger.info(f"[Notion] Summary page saved: {page.get('url')}")
         return {"id": page.get("id"), "url": page.get("url")}
     except Exception as exc:
@@ -232,3 +236,36 @@ def save_summary_to_user_notion(
         return None
     finally:
         db.close()
+
+    def handle_failure(self, video_id: str, task_id: str):
+        """파이프라인 실패 시 Knowledge.status = FAILED.
+
+        chain.on_error()로 연결되어 Step 1/2/3 어느 단계 raise든 호출됨.
+        mark_failed는 best-effort — 핸들러 안에서 또 raise되어 연쇄 실패 나는 것을 방지.
+        """
+        logger.error(f"[Error] 파이프라인 에러 (video_id: {video_id}, task: {task_id})")
+        try:
+            asyncio.run(mark_failed(video_id, reason=f"Task {task_id} failed"))
+        except Exception as e:
+            logger.error(f"[Error] mark_failed 호출 실패: {e}")
+
+async def check_duplicate_hit_count(video_id: str, user_id: int):
+    async with async_session_maker() as session:
+        knowledge_repository = KnowledgeRepository(session)
+
+        existing_knowledge = await knowledge_repository.find_by_user_and_video_id(
+            user_id=int(user_id),
+            video_id=video_id,
+        )
+
+        if not existing_knowledge:
+            return None
+
+        updated_knowledge = await knowledge_repository.increase_hit_count(
+            existing_knowledge
+        )
+
+        return {
+            "knowledge_id": str(updated_knowledge.id),
+            "hit_count": updated_knowledge.hit_count,
+        }

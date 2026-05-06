@@ -34,7 +34,7 @@ class KnowledgeRepository:
         await self.session.flush()
         return category
 
-    async def create_initial_record(self, video_id: str, user_id: int = 1):
+    async def create_initial_record(self, video_id: str, user_id: int):
         knowledge_id = uuid.uuid4()
 
         try:
@@ -44,9 +44,10 @@ class KnowledgeRepository:
                 title="처리 중인 영상",
                 summary="",
                 original_url=f"https://www.youtube.com/watch?v={video_id}",
-                source_type=SourceType.YOUTUBE,
-                status=ProcessStatus.PENDING,
+                source_type="YOUTUBE",
+                status="PENDING",
                 category_id=None,
+                hit_count=1,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
@@ -69,6 +70,33 @@ class KnowledgeRepository:
             await self.session.rollback()
             logger.error(f"Failed to create initial knowledge record: {exc}")
             raise
+
+    async def find_by_user_and_video_id(self, user_id: int, video_id: str):
+        result = await self.session.execute(
+            select(Knowledge)
+            .join(
+                YoutubeMetadata,
+                YoutubeMetadata.knowledge_id == Knowledge.id,
+            )
+            .where(
+                Knowledge.user_id == user_id,
+                YoutubeMetadata.video_id == video_id,
+            )
+            .limit(1)
+        )
+
+        return result.scalars().first()
+    
+    async def increase_hit_count(self, knowledge: Knowledge):
+        knowledge.hit_count = (knowledge.hit_count or 0) + 1
+        knowledge.updated_at = datetime.utcnow()
+
+        self.session.add(knowledge)
+
+        await self.session.commit()
+        await self.session.refresh(knowledge)
+
+        return knowledge
 
 
 async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
