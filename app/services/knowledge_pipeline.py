@@ -5,7 +5,8 @@ from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
 from app.repositories.knowledge import _update_chunk_embeddings
-
+from database import async_session_maker
+from app.repositories.knowledge import KnowledgeRepository
 
 
 # repositories — Step 1/2/3/실패 단계의 DB 호출 진입점
@@ -190,3 +191,24 @@ class KnowledgePipelineService:
             asyncio.run(mark_failed(video_id, reason=f"Task {task_id} failed"))
         except Exception as e:
             logger.error(f"[Error] mark_failed 호출 실패: {e}")
+
+async def check_duplicate_hit_count(video_id: str, user_id: int):
+    async with async_session_maker() as session:
+        knowledge_repository = KnowledgeRepository(session)
+
+        existing_knowledge = await knowledge_repository.find_by_user_and_video_id(
+            user_id=int(user_id),
+            video_id=video_id,
+        )
+
+        if not existing_knowledge:
+            return None
+
+        updated_knowledge = await knowledge_repository.increase_hit_count(
+            existing_knowledge
+        )
+
+        return {
+            "knowledge_id": str(updated_knowledge.id),
+            "hit_count": updated_knowledge.hit_count,
+        }

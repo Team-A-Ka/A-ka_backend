@@ -19,7 +19,7 @@ class KnowledgeRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create_initial_record(self, video_id: str, user_id: int = 1):
+    async def create_initial_record(self, video_id: str, user_id: int):
         knowledge_id = uuid.uuid4()
 
         try:
@@ -32,6 +32,7 @@ class KnowledgeRepository:
                 source_type="YOUTUBE",
                 status="PENDING",
                 category_id=1,  # 나중에 수정
+                hit_count=1,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
@@ -57,8 +58,32 @@ class KnowledgeRepository:
             logger.error(f"최초 레코드 생성 실패: {e}")
             raise
 
-    def find_by_user_and_video_id(self, db, user_id: int, video_id: str):
-        return db.query(Knowledge).join(YoutubeMetadata)
+    async def find_by_user_and_video_id(self, user_id: int, video_id: str):
+        result = await self.session.execute(
+            select(Knowledge)
+            .join(
+                YoutubeMetadata,
+                YoutubeMetadata.knowledge_id == Knowledge.id,
+            )
+            .where(
+                Knowledge.user_id == user_id,
+                YoutubeMetadata.video_id == video_id,
+            )
+            .limit(1)
+        )
+
+        return result.scalars().first()
+    
+    async def increase_hit_count(self, knowledge: Knowledge):
+        knowledge.hit_count = (knowledge.hit_count or 0) + 1
+        knowledge.updated_at = datetime.utcnow()
+
+        self.session.add(knowledge)
+
+        await self.session.commit()
+        await self.session.refresh(knowledge)
+
+        return knowledge
 
 
 async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
@@ -141,7 +166,7 @@ async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
             raise
 
 
-async def create_base(video_id: str, user_id: str):
+async def create_base(video_id: str, user_id: int):
     async with async_session_maker() as session:
         repo = KnowledgeRepository(session)
         # DB에 PENDING 레코드 생성

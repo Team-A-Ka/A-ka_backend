@@ -10,7 +10,7 @@ import asyncio
 from celery import shared_task, chain
 from celery.utils.log import get_task_logger
 from app.repositories.knowledge import create_base, mark_failed
-from app.services.knowledge_pipeline import KnowledgePipelineService
+from app.services.knowledge_pipeline import KnowledgePipelineService, check_duplicate_hit_count
 from app.services.save_only_service import SaveOnlyService
 
 logger = get_task_logger(__name__)
@@ -89,6 +89,23 @@ def run_core_pipeline_task(video_id: str, user_id: str):
     """
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
     try:
+        duplicate_result = asyncio.run(
+            check_duplicate_hit_count(video_id, user_id)
+        )
+
+        if duplicate_result:
+            logger.info(
+        f"중복 영상 감지: video_id={video_id}, "
+        f"user_id={user_id}, hit_count={duplicate_result['hit_count']}"
+            )
+
+            return {
+                "video_id": video_id,
+                "user_id": user_id,
+                "duplicate": True,
+                "hit_count": duplicate_result["hit_count"],
+            }
+    
         # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
         knowledge_db_id = asyncio.run(create_base(video_id,user_id))
         logger.info(f"DB 초기 레코드 생성 성공: {knowledge_db_id}")
