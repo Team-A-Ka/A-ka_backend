@@ -22,7 +22,7 @@ class SaveOnlyService:
     def __init__(self):
         self.youtube_service = YouTubeService()
 
-    def save(self, video_id: str, user_id: str):
+    def save(self, video_id: str, user_id: int):
         metadata = self.youtube_service.get_metadata(video_id)
         title = metadata.get("video_title", f"영상 {video_id}")
 

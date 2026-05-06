@@ -14,7 +14,7 @@ openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 class ChatCommandService:
-    def process(self, user_id: str, user_message: str) -> dict:
+    def process(self, user_id: int, user_message: str) -> dict:
         logger.info(f"====== [AI Router] 의도 분석 시작 (User: {user_id}) ======")
         logger.info(f"입력된 텍스트: {user_message}")
         intent, detected_url = self.analyze_intent(user_message)
@@ -84,7 +84,7 @@ class ChatCommandService:
                     intent = IntentType.UNKNOWN.value
         return intent, detected_url
 
-    def handle_upload(self, user_id: str, detected_url: str | None) -> dict:
+    def handle_upload(self, user_id: int, detected_url: str | None) -> dict:
         video_id = self.parse_youtube_video_id(detected_url)
         if not video_id:
             logger.warning(f"➔ URL({detected_url})이 올바른 유튜브 형식이 아닙니다.")
@@ -107,7 +107,7 @@ class ChatCommandService:
             "pipeline": result,
         }
 
-    def handle_save_only(self, user_id: str, detected_url: str | None) -> dict:
+    def handle_save_only(self, user_id: int, detected_url: str | None) -> dict:
         video_id = self.parse_youtube_video_id(detected_url)
         if not video_id:
             logger.warning(f"➔ URL({detected_url})이 올바른 유튜브 형식이 아닙니다.")
@@ -131,7 +131,7 @@ class ChatCommandService:
 
     def handle_search(
         self,
-        user_id: str,
+        user_id: int,
         user_message: str,
     ) -> dict:
         logger.info("➔ SEARCH 의도 감지. RAG 검색 파이프라인 실행")
