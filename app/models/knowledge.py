@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 import uuid
 from database import Base
 import enum
+from pgvector.sqlalchemy import Vector
 
 class SourceType(enum.Enum):
     YOUTUBE = "YOUTUBE"
@@ -65,6 +66,7 @@ class YoutubeKnowledgeChunk(Base):
     summary_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     start_time: Mapped[int] = mapped_column(BigInteger, nullable=False)
     chunk_order: Mapped[int] = mapped_column(nullable=False)
+    embedding: Mapped[Optional[Vector]] = mapped_column(Vector(1536), nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
