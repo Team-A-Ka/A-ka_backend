@@ -1,16 +1,19 @@
-import uuid
 import logging
-import asyncio
+import uuid
 from datetime import datetime
+
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from database import async_session_maker
+
+from app.models.category import Category
 from app.models.knowledge import (
     Knowledge,
+    ProcessStatus,
+    SourceType,
     YoutubeKnowledgeChunk,
     YoutubeMetadata,
-    ProcessStatus,
 )
+from database import async_session_maker
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +21,18 @@ logger = logging.getLogger(__name__)
 class KnowledgeRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def get_or_create_category(self, category_name: str | None) -> Category:
+        name = normalize_category_name(category_name)
+        result = await self.session.execute(select(Category).where(Category.name == name))
+        category = result.scalars().first()
+        if category is not None:
+            return category
+
+        category = Category(name=name)
+        self.session.add(category)
+        await self.session.flush()
+        return category
 
     async def create_initial_record(self, video_id: str, user_id: int = 1):
         knowledge_id = uuid.uuid4()
@@ -29,9 +44,9 @@ class KnowledgeRepository:
                 title="처리 중인 영상",
                 summary="",
                 original_url=f"https://www.youtube.com/watch?v={video_id}",
-                source_type="YOUTUBE",
-                status="PENDING",
-                category_id=1,  # 나중에 수정
+                source_type=SourceType.YOUTUBE,
+                status=ProcessStatus.PENDING,
+                category_id=None,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
@@ -46,19 +61,14 @@ class KnowledgeRepository:
 
             self.session.add(knowledge)
             self.session.add(youtube_metadata)
-
             await self.session.commit()
 
-            logger.info(f"최초 레코드 생성 완료: knowledge_id={knowledge_id}")
+            logger.info(f"Initial knowledge record created: knowledge_id={knowledge_id}")
             return knowledge_id
-
-        except Exception as e:
+        except Exception as exc:
             await self.session.rollback()
-            logger.error(f"최초 레코드 생성 실패: {e}")
+            logger.error(f"Failed to create initial knowledge record: {exc}")
             raise
-
-    def find_by_user_and_video_id(self, db, user_id: str, video_id: str):
-        return db.query(Knowledge).join(YoutubeMetadata)
 
 
 async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
@@ -66,26 +76,17 @@ async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
         try:
             result = await session.execute(
                 select(Knowledge.id)
-                .join(
-                    YoutubeMetadata,
-                    YoutubeMetadata.knowledge_id == Knowledge.id,
-                )
+                .join(YoutubeMetadata, YoutubeMetadata.knowledge_id == Knowledge.id)
                 .where(YoutubeMetadata.video_id == video_id)
                 .order_by(Knowledge.created_at.desc())
                 .limit(1)
             )
-
             knowledge_id = result.scalars().first()
-
             if knowledge_id is None:
-                raise Exception(
-                    f"video_id={video_id}에 해당하는 Knowledge 레코드가 없습니다."
-                )
+                raise Exception(f"No Knowledge record found for video_id={video_id}.")
 
             metadata_result = await session.execute(
-                select(YoutubeMetadata).where(
-                    YoutubeMetadata.knowledge_id == knowledge_id
-                )
+                select(YoutubeMetadata).where(YoutubeMetadata.knowledge_id == knowledge_id)
             )
             youtube_metadata = metadata_result.scalars().first()
 
@@ -105,127 +106,162 @@ async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
                     )
                 )
 
-            # 3. 청크만 여러 개 저장, ID를 추적하기 위해 리스트에 보관
             saved_objects = []
             for chunk_data in chunks:
                 if not chunk_data:
                     continue
 
-                new_chunk = YoutubeKnowledgeChunk(
+                chunk = YoutubeKnowledgeChunk(
                     knowledge_id=knowledge_id,
                     chunk_order=chunk_data.get("chunk_order", 0),
                     content=chunk_data.get("content", ""),
                     start_time=chunk_data.get("start_time", 0),
                 )
-                session.add(new_chunk)
-                saved_objects.append(new_chunk)
+                session.add(chunk)
+                saved_objects.append(chunk)
 
-            await session.commit()  # DB에 실제 ID가 생성되는 부분
+            await session.commit()
+            logger.info(f"[Step 1] Saved {len(saved_objects)} chunks to DB")
 
-            logger.info(f"[Step 1] 청킹 데이터 DB 저장 완료: {len(chunks)}개")
-
-            # ID가 포함된 명단을 반환 (업데이트할 때 ID가 필요하기 때문)
             return [
                 {
-                    "id": c.id,
-                    "chunk_order": c.chunk_order,
-                    "content": c.content,
-                    "start_time": c.start_time,
+                    "id": chunk.id,
+                    "chunk_order": chunk.chunk_order,
+                    "content": chunk.content,
+                    "start_time": chunk.start_time,
                 }
-                for c in saved_objects
+                for chunk in saved_objects
             ]
-
-        except Exception as e:
+        except Exception as exc:
             await session.rollback()
-            logger.error(f"[Step 1] 청킹 데이터 DB 저장 실패: {e}")
+            logger.error(f"[Step 1] Failed to save chunks to DB: {exc}")
             raise
 
 
-async def create_base(video_id: str):
+async def create_base(video_id: str, user_id: int):
     async with async_session_maker() as session:
         repo = KnowledgeRepository(session)
-        # DB에 PENDING 레코드 생성
-        return await repo.create_initial_record(video_id)
+        return await repo.create_initial_record(video_id, user_id)
 
 
-async def _get_latest_knowledge_id(session, video_id: str):
-    """주어진 video_id에 해당하는 가장 최근 Knowledge 레코드의 ID를 반환합니다."""
-    result = await session.execute(
-        select(Knowledge.id)
-        .join(YoutubeMetadata, YoutubeMetadata.knowledge_id == Knowledge.id)
-        .where(YoutubeMetadata.video_id == video_id)
-        .order_by(Knowledge.created_at.desc())
-        .limit(1)
-    )
-    return result.scalars().first()
+def normalize_category_name(category_name: str | None) -> str:
+    name = (category_name or "").strip().replace(" ", "")
+    return name[:50] or "미분류"
 
 
-# ==========================================
-# Step 2 결과 반영 — LangGraph 산출물 DB 단일 트랜잭션 UPDATE
-# ==========================================
-async def save_intelligence_result(
+async def list_category_names() -> list[str]:
+    async with async_session_maker() as session:
+        result = await session.execute(select(Category.name).order_by(Category.name))
+        return list(result.scalars().all())
+
+
+async def update_summary_result_to_db(
+    video_id: str,
+    title: str,
+    summary: str,
+    category_name: str | None,
+) -> dict:
+    async with async_session_maker() as session:
+        try:
+            repo = KnowledgeRepository(session)
+            result = await session.execute(
+                select(Knowledge)
+                .join(YoutubeMetadata, YoutubeMetadata.knowledge_id == Knowledge.id)
+                .where(YoutubeMetadata.video_id == video_id)
+                .order_by(Knowledge.created_at.desc())
+                .limit(1)
+            )
+            knowledge = result.scalars().first()
+            if knowledge is None:
+                raise Exception(f"No Knowledge record found for video_id={video_id}.")
+
+            category = await repo.get_or_create_category(category_name)
+            knowledge.title = (title or knowledge.title)[:255]
+            knowledge.summary = summary or ""
+            knowledge.category_id = category.id
+            knowledge.status = ProcessStatus.COMPLETED
+            knowledge.updated_at = datetime.utcnow()
+
+            await session.commit()
+            return {
+                "knowledge_id": str(knowledge.id),
+                "category_id": category.id,
+                "category_name": category.name,
+            }
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _update_chunk_embeddings(result_chunks: list):
+    async with async_session_maker() as session:
+        async with session.begin():
+            for chunk_data in result_chunks:
+                if "id" not in chunk_data or "embedding" not in chunk_data:
+                    continue
+                await session.execute(
+                    update(YoutubeKnowledgeChunk)
+                    .where(YoutubeKnowledgeChunk.id == chunk_data["id"])
+                    .values(embedding=chunk_data["embedding"])
+                )
+        await session.commit()
+
+
+async def update_knowledge_after_langgraph(
     video_id: str,
     title: str,
     summary: str,
     summarized_chunks: list,
 ):
-    """LangGraph 실행 결과(텍스트 요약 + 임베딩 벡터)를 단일 트랜잭션으로 DB에 한 번에 반영.
-    - 데이터 불일치(고스트 데이터) 방지
-    """
     async with async_session_maker() as session:
-        async with session.begin():  # 트랜잭션 시작 (실패 시 전체 rollback 됨)
-            # 1) video_id 로 가장 최근 Knowledge 찾기
-            knowledge_id = await _get_latest_knowledge_id(session, video_id)
-
+        try:
+            result = await session.execute(
+                select(Knowledge.id)
+                .join(YoutubeMetadata, YoutubeMetadata.knowledge_id == Knowledge.id)
+                .where(YoutubeMetadata.video_id == video_id)
+                .order_by(Knowledge.created_at.desc())
+                .limit(1)
+            )
+            knowledge_id = result.scalars().first()
             if knowledge_id is None:
-                raise Exception(
-                    f"video_id={video_id} 에 해당하는 Knowledge 레코드가 없습니다. "
-                )
+                raise Exception(f"No Knowledge record found for video_id={video_id}.")
 
-            # 2) Knowledge — title, summary UPDATE
             await session.execute(
                 update(Knowledge)
                 .where(Knowledge.id == knowledge_id)
-                .values(title=title, summary=summary)
+                .values(title=title[:255], summary=summary)
             )
 
-            # 3) YoutubeKnowledgeChunk — summary_detail 및 embedding 동시 UPDATE (Bulk Update)
-            update_data = []
             for chunk in summarized_chunks:
-                if "id" in chunk and "summary" in chunk:
-                    chunk_update = {
-                        "id": chunk["id"],
-                        "summary_detail": chunk["summary"]
-                    }
-                    if "embedding" in chunk:
-                        chunk_update["embedding"] = chunk["embedding"]
-                    
-                    update_data.append(chunk_update)
-            
-            if update_data:
-                await session.execute(update(YoutubeKnowledgeChunk), update_data)
+                order = chunk.get("chunk_order")
+                if order is None:
+                    continue
+                await session.execute(
+                    update(YoutubeKnowledgeChunk)
+                    .where(
+                        YoutubeKnowledgeChunk.knowledge_id == knowledge_id,
+                        YoutubeKnowledgeChunk.chunk_order == order,
+                    )
+                    .values(summary_detail=chunk.get("summary", ""))
+                )
 
+            await session.commit()
             logger.info(
-                f"[Step 2] Knowledge & Embeddings 단일 트랜잭션 UPDATE 완료: "
-                f"knowledge_id={knowledge_id}, chunks={len(update_data)}개 반영"
+                f"[Step 2] Knowledge updated: knowledge_id={knowledge_id}, "
+                f"chunks={len(summarized_chunks)}"
             )
             return knowledge_id
+        except Exception as exc:
+            await session.rollback()
+            logger.error(f"[Step 2] Failed to update LangGraph result: {exc}")
+            raise
 
 
-# ==========================================
-# SAVE_ONLY 의도 — 단일 INSERT (status=COMPLETED)  [추가: 채훈, #1]
-# ==========================================
-async def save_link_only(video_id: str, metadata: dict, user_id: int = 1):
-    """SAVE_ONLY 의도용 — Knowledge + YoutubeMetadata 단일 INSERT.
-
-    LangGraph(요약/벡터화/카테고리 분류)를 거치지 않으므로 chunks/embeddings는 만들지 않음.
-    바로 status=COMPLETED 로 처리 종료.
-
-    NOTE:
-      - user_id=1 하드코딩은 임시. 카카오 user_id ↔ User.id 매핑은 #5 작업에서 보강.
-        (create_initial_record 도 동일한 default를 쓰고 있어 패턴 일치.)
-      - category_id 는 None — SAVE_ONLY는 카테고리 분류 안 함.
-    """
+async def save_link_only(
+    video_id: str,
+    metadata: dict,
+    user_id: int = 1,
+):
     knowledge_id = uuid.uuid4()
 
     async with async_session_maker() as session:
@@ -233,11 +269,11 @@ async def save_link_only(video_id: str, metadata: dict, user_id: int = 1):
             knowledge = Knowledge(
                 id=knowledge_id,
                 user_id=user_id,
-                title=metadata.get("video_title", f"영상 {video_id}"),
+                title=metadata.get("video_title", f"영상 {video_id}")[:255],
                 summary=None,
                 original_url=f"https://www.youtube.com/watch?v={video_id}",
-                source_type="YOUTUBE",
-                status="COMPLETED",
+                source_type=SourceType.YOUTUBE,
+                status=ProcessStatus.COMPLETED,
                 category_id=None,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
@@ -256,35 +292,29 @@ async def save_link_only(video_id: str, metadata: dict, user_id: int = 1):
             await session.commit()
 
             logger.info(
-                f"[SAVE_ONLY] Knowledge+YoutubeMetadata 저장 완료: "
+                f"[SAVE_ONLY] Saved Knowledge+YoutubeMetadata: "
                 f"knowledge_id={knowledge_id}, video_id={video_id}"
             )
             return knowledge_id
-
-        except Exception as e:
+        except Exception as exc:
             await session.rollback()
-            logger.error(f"[SAVE_ONLY] DB 저장 실패: {e}")
+            logger.error(f"[SAVE_ONLY] Failed to save link only: {exc}")
             raise
 
 
-# ==========================================
-# Step 3 — 정상 종료 status UPDATE  [추가: 채훈, #3]
-# ==========================================
 async def mark_completed(video_id: str):
-    """파이프라인 정상 종료 시 Knowledge.status = COMPLETED.
-
-    update_pipeline_status (Step 3) 에서 호출.
-    - video_id 기반으로 가장 최근 Knowledge 찾기 (save_chunks_to_db / update_knowledge_after_langgraph 패턴 재사용).
-    - 레코드 없으면 경고만 찍고 None 리턴 — chain 마지막 단계가 raise로 끊겨 핸들러로 넘어가는 것을 방지.
-    """
     async with async_session_maker() as session:
         try:
-            knowledge_id = await _get_latest_knowledge_id(session, video_id)
-
+            result = await session.execute(
+                select(Knowledge.id)
+                .join(YoutubeMetadata, YoutubeMetadata.knowledge_id == Knowledge.id)
+                .where(YoutubeMetadata.video_id == video_id)
+                .order_by(Knowledge.created_at.desc())
+                .limit(1)
+            )
+            knowledge_id = result.scalars().first()
             if knowledge_id is None:
-                logger.warning(
-                    f"[Step 3] mark_completed: video_id={video_id} 레코드 없음 — UPDATE 스킵"
-                )
+                logger.warning(f"[Step 3] No Knowledge record for video_id={video_id}")
                 return None
 
             await session.execute(
@@ -293,48 +323,31 @@ async def mark_completed(video_id: str):
                 .values(status=ProcessStatus.COMPLETED)
             )
             await session.commit()
-            logger.info(
-                f"[Step 3] Knowledge.status = COMPLETED (knowledge_id={knowledge_id})"
-            )
             return knowledge_id
-
-        except Exception as e:
+        except Exception as exc:
             await session.rollback()
-            logger.error(f"[Step 3] mark_completed 실패: {e}")
+            logger.error(f"[Step 3] Failed to mark completed: {exc}")
             raise
 
 
-# ==========================================
-# 에러 핸들러 — 실패 status UPDATE  [추가: 채훈, #4]
-# ==========================================
 async def mark_failed(video_id: str, reason: str = ""):
-    """파이프라인 실패 확정 시 Knowledge.status = FAILED.
-
-    호출 위치:
-      - handle_pipeline_failure (chain.on_error → UPLOAD 분기 실패)
-      - save_link_only_task except (retry exhausted → SAVE_ONLY 분기 최종 실패)
-
-    동작:
-      - video_id 기반 가장 최근 Knowledge 찾기. 레코드 없으면 경고만.
-      - best-effort: 핸들러가 또 실패하면 로그만 남기고 raise 안 함 (재귀/연쇄 실패 방지).
-    """
     async with async_session_maker() as session:
         try:
-            knowledge_id = await _get_latest_knowledge_id(session, video_id)
-
+            result = await session.execute(
+                select(Knowledge.id)
+                .join(YoutubeMetadata, YoutubeMetadata.knowledge_id == Knowledge.id)
+                .where(YoutubeMetadata.video_id == video_id)
+                .order_by(Knowledge.created_at.desc())
+                .limit(1)
+            )
+            knowledge_id = result.scalars().first()
             if knowledge_id is None:
-                logger.warning(
-                    f"[Error] mark_failed: video_id={video_id} 레코드 없음 — UPDATE 스킵 "
-                    f"(아주 초반에 죽었거나 SAVE_ONLY가 INSERT 직전에 실패했을 가능성)"
-                )
+                logger.warning(f"[Error] No Knowledge record for video_id={video_id}")
                 return None
 
             await session.execute(
                 update(Knowledge)
-                .where(
-                    Knowledge.id == knowledge_id,
-                    Knowledge.status != ProcessStatus.FAILED,
-                )
+                .where(Knowledge.id == knowledge_id)
                 .values(status=ProcessStatus.FAILED)
             )
             await session.commit()
@@ -343,9 +356,7 @@ async def mark_failed(video_id: str, reason: str = ""):
                 f"(knowledge_id={knowledge_id}, reason='{reason[:80]}')"
             )
             return knowledge_id
-
-        except Exception as e:
+        except Exception as exc:
             await session.rollback()
-            # 핸들러 안에서 또 죽어도 raise하지 않음 — 연쇄 실패 방지.
-            logger.error(f"[Error] mark_failed 실패: {e}")
+            logger.error(f"[Error] Failed to mark failed: {exc}")
             return None

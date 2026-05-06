@@ -7,7 +7,9 @@
 
 import asyncio
 
-from celery import shared_task, chain
+from celery import chain
+from app.core.celery_app import celery_app
+from celery import shared_task
 from celery.utils.log import get_task_logger
 from app.repositories.knowledge import create_base, mark_failed
 from app.services.knowledge_pipeline import KnowledgePipelineService
@@ -22,7 +24,7 @@ save_only_service = SaveOnlyService()
 # ==========================================
 # Step 1: 수집 + 청킹
 # ==========================================
-@shared_task(bind=True, name="knowledge.collect_and_chunk")
+@celery_app.task(bind=True, name="knowledge.collect_and_chunk")
 def collect_and_chunk_task(self, video_id: str):
     return knowledge_pipeline_service.collect_and_chunk(video_id)
 
@@ -56,13 +58,13 @@ def handle_pipeline_failure_task(self, task_id, video_id: str):
 # 단순 링크 저장 (SAVE_ONLY) 진입점
 # ==========================================
 @shared_task(bind=True, name="knowledge.save_link_only", max_retries=3)
-def save_link_only_task(self, video_id: str):
+def save_link_only_task(self, video_id: str, user_id: int):
     """
     LangGraph 요약을 타지 않고 단순 링크만 저장.
     Celery retry 모두 소진 시 status=FAILED 마킹 후 raise.
     """
     try:
-        return save_only_service.save(video_id)
+        return save_only_service.save(video_id, user_id)
 
     except Exception as exc:
         # 재시도 여력 있으면 retry, 없으면 status=FAILED 마킹 후 최종 raise
@@ -82,7 +84,7 @@ def save_link_only_task(self, video_id: str):
 # ==========================================
 # ⭐️ 파이프라인 진입점 — chat_command.py에서 호출
 # ==========================================
-def run_core_pipeline_task(video_id: str):
+def run_core_pipeline_task(video_id: str, user_id: int):
     """
     실행 순서 (순차 chain):
     (수집+청킹) → (LangGraph: 요약→벡터화→개요) → (완료)
@@ -90,7 +92,7 @@ def run_core_pipeline_task(video_id: str):
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
     try:
         # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
-        knowledge_db_id = asyncio.run(create_base(video_id))
+        knowledge_db_id = asyncio.run(create_base(video_id, user_id))
         logger.info(f"DB 초기 레코드 생성 성공: {knowledge_db_id}")
 
     except Exception as e:

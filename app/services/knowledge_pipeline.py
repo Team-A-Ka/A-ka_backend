@@ -1,35 +1,51 @@
 import asyncio
+from typing import Any
+
 from celery.utils.log import get_task_logger
+
+from app.repositories.knowledge import (
+    _update_chunk_embeddings,
+    list_category_names,
+    mark_failed,
+    save_chunks_to_db,
+    update_knowledge_after_langgraph,
+    update_summary_result_to_db,
+)
+from app.services.category_resolver import resolve_category_name
 from app.services.intelligence_service import IntelligenceService
+from app.services.notion_connection_service import (
+    create_summary_page_for_user,
+    resolve_internal_user_id,
+)
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
-
-
-
-# repositories — Step 1/2/3/실패 단계의 DB 호출 진입점
-# (실제 SQL/모델 조작은 모두 repositories.knowledge 안에 캡슐화됨)
-from app.repositories.knowledge import (
-    save_chunks_to_db,
-    save_intelligence_result,
-    mark_completed,
-    mark_failed,
-)
-
-# TODO: Pydantic 기반 State 통일(structured_output)
+from database import SessionLocal
 
 logger = get_task_logger(__name__)
+
+
+def run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        return loop.create_task(coro)
+    return asyncio.run(coro)
 
 
 class KnowledgePipelineService:
     def __init__(self):
         self.youtube_service = YouTubeService()
-        # TODO(향후 고도화): 매 태스크마다 IntelligenceService 인스턴스를 새로 생성하는 것은 비효율적임.
-        # 모듈 레벨 싱글톤 패턴 또는 의존성 주입(DI) 방식으로 변경하여 재사용성 및 메모리 효율 개선 필요.
         self.intelligence_service = IntelligenceService()
 
-    def collect_and_chunk(self, video_id: str):
-        """자막 추출 → 정제 → 청킹 → DB 저장"""
+    def collect_and_chunk(
+        self,
+        video_id: str,
+        user_id: str | int | None = None,
+    ) -> dict[str, Any]:
         try:
             metadata = self.youtube_service.get_metadata(video_id)
         except Exception:
@@ -39,65 +55,64 @@ class KnowledgePipelineService:
                 "channel_name": "Unknown",
                 "duration": 0,
             }
-        logger.info(f"사용중인 API KEY 존재 여부: {bool(self.youtube_service.api_key)}")
+
+        logger.info(f"Using YouTube API key: {bool(self.youtube_service.api_key)}")
 
         transcript_data = self.youtube_service.get_transcript(video_id)
         if isinstance(transcript_data, str) and transcript_data.startswith("Error"):
-            raise ValueError(f"자막 추출 실패: {transcript_data}")
+            raise ValueError(f"Failed to fetch transcript: {transcript_data}")
 
-        refine_seg = refine_transcript_segments(transcript_data)
-
-        if not refine_seg:
+        refined_segments = refine_transcript_segments(transcript_data)
+        if not refined_segments:
             return {
                 "video_id": video_id,
+                "user_id": user_id,
                 "metadata": metadata,
                 "chunks": [],
             }
 
-        chunks = chunk_by_time(refine_seg, 60000)
-        logger.info(f"[Step 1] 완료: {len(chunks)} 개의 청크 생성")
+        chunks = chunk_by_time(refined_segments, 60000)
+        logger.info(f"[Step 1] Created {len(chunks)} chunks")
 
-        final_chunks = []
-        for i, raw_chunk in enumerate(chunks):
-            final_chunks.append(
-                {
-                    "chunk_order": i,
-                    "content": raw_chunk.get("content", ""),
-                    "start_time": raw_chunk.get("start_time", 0),
-                }
-            )
+        final_chunks = [
+            {
+                "chunk_order": index,
+                "content": raw_chunk.get("content", ""),
+                "start_time": raw_chunk.get("start_time", 0),
+            }
+            for index, raw_chunk in enumerate(chunks)
+        ]
 
-        # ── DB 저장 로직
-        # DB에 저장된 후 'ID(UUID)'가 채워진 데이터를 변수에 담기
-        saved_chunks = asyncio.run(save_chunks_to_db(video_id, metadata, final_chunks))
+        saved_chunks = run_async(save_chunks_to_db(video_id, metadata, final_chunks))
+        if saved_chunks:
+            logger.info(f"First chunk start_time: {saved_chunks[0]['start_time']}")
+            logger.info(f"First chunk content: {saved_chunks[0]['content'][:50]}")
 
-        # 마지막 return에서 final_chunks 대신 'ID가 포함된' saved_chunks를 돌려주기
         return {
             "video_id": video_id,
+            "user_id": user_id,
             "metadata": metadata,
             "chunks": saved_chunks,
         }
 
-    def run_intelligence(self, data: dict):
-        """Step 2 — LangGraph 실행 + 결과 DB 반영.
-
-        흐름:
-          1) 빈 chunks 가드 — Step 1에서 자막 추출 실패 시 LangGraph 스킵 + fallback dict 반환.
-          2) IntelligenceService.run() — LangGraph(요약 → 벡터화 → 개요 생성) 동기 실행.
-          3) save_intelligence_result() — 단일 트랜잭션으로 Knowledge.title/summary, YoutubeKnowledgeChunk.summary_detail 및 embedding UPDATE.
-          4) DB UPDATE 실패하면 바로 예외 던져서 핸들러가 처리하도록 함.
-        """
+    def run_intelligence(self, data: dict[str, Any]) -> dict[str, Any]:
         video_id = data.get("video_id")
         chunks = data.get("chunks", [])
         metadata = data.get("metadata")
+        user_id = data.get("user_id")
 
         if not chunks:
-            logger.warning(
-                f"[Step 2] chunks 비어있음 — 파이프라인 중단 (video_id: {video_id})"
-            )
-            # 빈 chunks는 요약 불가 → FAILED 상태로 확정 짓고 에러를 던져 체인을 끊음
-            asyncio.run(mark_failed(video_id, reason="자막을 추출할 수 없어 요약을 생성하지 못했습니다."))
-            raise ValueError(f"자막 추출 실패 (빈 chunks) - video_id: {video_id}")
+            logger.warning(f"[Step 2] chunks empty, skipping LangGraph: {video_id}")
+            return {
+                "video_id": video_id,
+                "user_id": user_id,
+                "metadata": metadata,
+                "title": f"Video {video_id}",
+                "full_summary": "Could not extract transcript, so no summary was generated.",
+                "category": "미분류",
+                "vector_count": 0,
+                "summarized_chunks": [],
+            }
 
         result = self.intelligence_service.run(
             {
@@ -106,58 +121,114 @@ class KnowledgePipelineService:
                 "metadata": metadata,
             }
         )
+        result["user_id"] = user_id
 
-        # ── DB 반영 (#2): LangGraph 산출물을 단일 트랜잭션으로 UPDATE
         try:
-            asyncio.run(
-                save_intelligence_result(
+            run_async(
+                update_knowledge_after_langgraph(
                     video_id=video_id,
                     title=result["title"],
                     summary=result["full_summary"],
-                    summarized_chunks=result.get("summarized_chunks", []),
+                    summarized_chunks=result["summarized_chunks"],
                 )
             )
-        except Exception as e:
-            # 단일 트랜잭션 실패 — 데이터 불일치 방지를 위해 에러를 던지고 FAILED 처리하도록 함
-            logger.error(f"[Step 2] save_intelligence_result 실패: {e}")
-            raise
+        except Exception as exc:
+            logger.error(f"[Step 2] Failed to update knowledge result: {exc}")
 
-        logger.info(f"[Step 2: LangGraph] 완료 — 제목: {result['title']}")
+        if result.get("summarized_chunks"):
+            logger.info(
+                f"Saving embeddings for {len(result['summarized_chunks'])} chunks"
+            )
+            run_async(_update_chunk_embeddings(result["summarized_chunks"]))
+
+        logger.info(f"[Step 2: LangGraph] Completed title={result['title']}")
         return result
 
-    def publish_pipeline_result(self, data: dict):
-        """Step 3 — Knowledge.status = COMPLETED + (향후) 노션 업로드 트리거.
-
-        - mark_completed(): 정상 종료 시 status UPDATE. 레코드 없으면 best-effort로 경고만 남김.
-        - 노션 업로드: 별도 작업 (TODO).
-        """
+    def publish_pipeline_result(self, data: dict[str, Any]) -> dict[str, Any]:
         video_id = data.get("video_id")
-        title = data.get("title")
-        full_summary = data.get("full_summary")
-        # vector_count = data.get("vector_count", 0)
+        user_id = data.get("user_id")
+        title = data.get("title", "")
+        full_summary = data.get("full_summary", "")
+        raw_category = data.get("category")
 
-        # 1) Status 업데이트 (#3)
+        db_result = None
+        resolved_category = raw_category
+        if video_id:
+            existing_categories = run_async(list_category_names())
+            resolved_category = resolve_category_name(
+                raw_category=raw_category,
+                title=title,
+                summary=full_summary,
+                existing_categories=existing_categories,
+            )
+            logger.info(f"[Category] raw={raw_category}, resolved={resolved_category}")
+
+            db_result = run_async(
+                update_summary_result_to_db(
+                    video_id=video_id,
+                    title=title,
+                    summary=full_summary,
+                    category_name=resolved_category,
+                )
+            )
+
+        notion_page = None
+        if user_id:
+            notion_page = save_summary_to_user_notion(
+                user_id=user_id,
+                video_id=video_id,
+                title=title,
+                full_summary=full_summary,
+            )
+
+        logger.info(f"[Step 3] Completed video_id={video_id}, title={title}")
+        return {
+            "status": "Pipeline All Done",
+            "video_id": video_id,
+            "raw_category": raw_category,
+            "resolved_category": resolved_category,
+            "db_result": db_result,
+            "notion_page": notion_page,
+        }
+
+    def handle_failure(self, video_id: str, task_id: str) -> None:
+        logger.error(f"[Error] Pipeline failed (video_id={video_id}, task={task_id})")
         try:
-            asyncio.run(mark_completed(video_id))
-        except Exception as e:
-            logger.error(f"[Step 3] mark_completed 실패: {e}")
+            run_async(mark_failed(video_id, reason=f"Task {task_id} failed"))
+        except Exception as exc:
+            logger.error(f"[Error] Failed to mark pipeline failure: {exc}")
 
-        # 2) 노션 업로드 트리거 (TODO: 별도 작업)
-        # self._trigger_notion_upload(video_id, full_summary)
 
-        logger.info(
-            f"[Step 3] 완료 video_id={video_id}, title={title}, full_summary={full_summary}"
+def save_summary_to_user_notion(
+    user_id: str | int,
+    video_id: str,
+    title: str,
+    full_summary: str,
+) -> dict[str, Any] | None:
+    db = SessionLocal()
+    try:
+        internal_user_id = resolve_internal_user_id(db, user_id)
+        if internal_user_id is None:
+            logger.warning(f"[Notion] user_id={user_id} could not be resolved.")
+            return None
+
+        page = create_summary_page_for_user(
+            db=db,
+            user_id=internal_user_id,
+            title=title or f"YouTube summary {video_id}",
+            summary=full_summary or "Summary is empty.",
+            source_url=f"https://www.youtube.com/watch?v={video_id}",
         )
-        return "Pipeline All Done"
+        if page is None:
+            logger.info(
+                f"[Notion] user_id={internal_user_id} has no ready Notion connection."
+            )
+            return None
 
-    def handle_failure(self, video_id: str, task_id: str):
-        """파이프라인 실패 시 Knowledge.status = FAILED.
-
-        chain.on_error()로 연결되어 Step 1/2/3 어느 단계 raise든 호출됨.
-        mark_failed는 best-effort — 핸들러 안에서 또 raise되어 연쇄 실패 나는 것을 방지.
-        """
-        logger.error(f"[Error] 파이프라인 에러 (video_id: {video_id}, task: {task_id})")
-        try:
-            asyncio.run(mark_failed(video_id, reason=f"Task {task_id} failed"))
-        except Exception as e:
-            logger.error(f"[Error] mark_failed 호출 실패: {e}")
+        logger.info(f"[Notion] Summary page saved: {page.get('url')}")
+        return {"id": page.get("id"), "url": page.get("url")}
+    except Exception as exc:
+        logger.warning(f"[Notion] Failed to save summary page: {exc}")
+        return None
+    finally:
+        db.close()

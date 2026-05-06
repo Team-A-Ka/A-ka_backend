@@ -215,7 +215,7 @@ search_graph = build_search_graph()
 # ==========================================
 # 단일 진입점 — router_service.py에서 호출
 # ==========================================
-def search_and_answer(user_id: str, query: str) -> dict:
+def search_and_answer(user_id: int, query: str) -> dict:
     """SEARCH 파이프라인 실행"""
     logger.info(f"[SEARCH] 시작 (user: {user_id}, query: {query[:30]}...)")
 
