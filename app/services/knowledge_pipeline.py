@@ -4,7 +4,6 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
-from app.repositories.knowledge import _update_chunk_embeddings
 
 
 
@@ -12,7 +11,7 @@ from app.repositories.knowledge import _update_chunk_embeddings
 # (실제 SQL/모델 조작은 모두 repositories.knowledge 안에 캡슐화됨)
 from app.repositories.knowledge import (
     save_chunks_to_db,
-    update_knowledge_after_langgraph,
+    save_intelligence_result,
     mark_completed,
     mark_failed,
 )
@@ -20,19 +19,6 @@ from app.repositories.knowledge import (
 # TODO: Pydantic 기반 State 통일(structured_output)
 
 logger = get_task_logger(__name__)
-
-
-# --- Celery에서 async 함수를 실행하기 위한 헬퍼 ---
-def run_async(coro):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        return loop.create_task(coro)
-    else:
-        return asyncio.run(coro)
 
 
 class KnowledgePipelineService:
@@ -83,7 +69,7 @@ class KnowledgePipelineService:
 
         # ── DB 저장 로직
         # DB에 저장된 후 'ID(UUID)'가 채워진 데이터를 변수에 담기
-        saved_chunks = run_async(save_chunks_to_db(video_id, metadata, final_chunks))
+        saved_chunks = asyncio.run(save_chunks_to_db(video_id, metadata, final_chunks))
 
         # 마지막 return에서 final_chunks 대신 'ID가 포함된' saved_chunks를 돌려주기
         return {
@@ -98,10 +84,8 @@ class KnowledgePipelineService:
         흐름:
           1) 빈 chunks 가드 — Step 1에서 자막 추출 실패 시 LangGraph 스킵 + fallback dict 반환.
           2) IntelligenceService.run() — LangGraph(요약 → 벡터화 → 개요 생성) 동기 실행.
-          3) update_knowledge_after_langgraph() — Knowledge.title/summary, YoutubeKnowledgeChunk.summary_detail UPDATE.
-             - category_name → category_id 매핑은 향후 작업(#4)에서 추가.
-             - embeddings 저장은 향후 작업(#5: embedding 컬럼 추가) 후 별도 함수에서 처리.
-          4) DB UPDATE 실패해도 chain 자체는 진행 (Step 3 / 핸들러에서 종합 처리).
+          3) save_intelligence_result() — 단일 트랜잭션으로 Knowledge.title/summary, YoutubeKnowledgeChunk.summary_detail 및 embedding UPDATE.
+          4) DB UPDATE 실패하면 바로 예외 던져서 핸들러가 처리하도록 함.
         """
         video_id = data.get("video_id")
         chunks = data.get("chunks", [])
@@ -112,7 +96,7 @@ class KnowledgePipelineService:
                 f"[Step 2] chunks 비어있음 — 파이프라인 중단 (video_id: {video_id})"
             )
             # 빈 chunks는 요약 불가 → FAILED 상태로 확정 짓고 에러를 던져 체인을 끊음
-            run_async(mark_failed(video_id, reason="자막을 추출할 수 없어 요약을 생성하지 못했습니다."))
+            asyncio.run(mark_failed(video_id, reason="자막을 추출할 수 없어 요약을 생성하지 못했습니다."))
             raise ValueError(f"자막 추출 실패 (빈 chunks) - video_id: {video_id}")
 
         result = self.intelligence_service.run(
@@ -123,29 +107,20 @@ class KnowledgePipelineService:
             }
         )
 
-        # ── DB 반영 (#2): LangGraph 산출물을 Knowledge / YoutubeKnowledgeChunk 에 UPDATE
+        # ── DB 반영 (#2): LangGraph 산출물을 단일 트랜잭션으로 UPDATE
         try:
             asyncio.run(
-                update_knowledge_after_langgraph(
+                save_intelligence_result(
                     video_id=video_id,
                     title=result["title"],
                     summary=result["full_summary"],
-                    summarized_chunks=result["summarized_chunks"],
+                    summarized_chunks=result.get("summarized_chunks", []),
                 )
             )
         except Exception as e:
-            # 부분 실패 — chain은 계속, 핸들러가 종합 처리
-            logger.error(f"[Step 2] update_knowledge_after_langgraph 실패: {e}")
-
-        #### DB ####
-        # 생성된 벡터(임베딩)를 DB에 집어넣기
-        if "summarized_chunks" in result:
-            logger.info(
-                f"DB에 {len(result['summarized_chunks'])}개의 벡터 데이터를 저장합니다."
-            )
-            # 아래에 새로 만든 비동기 함수를 호출
-            run_async(_update_chunk_embeddings(result["summarized_chunks"]))
-        ############
+            # 단일 트랜잭션 실패 — 데이터 불일치 방지를 위해 에러를 던지고 FAILED 처리하도록 함
+            logger.error(f"[Step 2] save_intelligence_result 실패: {e}")
+            raise
 
         logger.info(f"[Step 2: LangGraph] 완료 — 제목: {result['title']}")
         return result

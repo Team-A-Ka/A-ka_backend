@@ -123,7 +123,7 @@ def run_e2e_tests():
     # 참고: 현재 SEARCH 응답은 Celery 워커의 로그에만 남고 웹훅 응답은 항상 '서버 연결 성공'임
     print(
         f"💡 (검색 결과는 워커 로그를 확인해주세요. 응답 메시지: {res['template']['outputs'][0]['simpleText']['text']})"
-    )
+    ) 
 
     print("\n" + "=" * 60)
     print("🎉 모든 E2E 테스트 시나리오 통과 완료!")

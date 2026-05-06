@@ -29,42 +29,49 @@ openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 # ==========================================
 # LangGraph 노드 1: 청크별 요약
 # ==========================================
+import concurrent.futures
+
+def _process_single_chunk(chunk):
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "너는 유튜브 영상의 텍스트 조각을 요약하는 AI야. "
+                        "핵심 인사이트와 정보 위주로 2~3문장으로 간결하게 요약해. "
+                        "불필요한 인트로, 인사말, 광고 문구는 무시해."
+                    ),
+                },
+                {"role": "user", "content": chunk["content"]},
+            ],
+        )
+        summary = response.choices[0].message.content.strip()
+        if response.usage:
+            logger.info(f"  [토큰 사용량] 청크 {chunk.get('chunk_order', '?')} 요약: {response.usage.total_tokens}")
+    except Exception as e:
+        logger.warning(f"  청크 {chunk.get('chunk_order', '?')} 요약 실패: {e}")
+        summary = chunk.get("content", "")[:100] + "..."
+
+    logger.info(f"  청크 {chunk.get('chunk_order', '?')} 요약 완료")
+    return {**chunk, "summary": summary}
+
+
 def summarize_each_chunk(state: IntelligenceState) -> dict:
-    """각 청크의 content를 OpenAI로 요약"""
+    """각 청크의 content를 OpenAI로 요약 (병렬 처리 적용)"""
     video_id = state.get("video_id", "Unknown")
     chunks = state.get("chunks", [])
 
     logger.info(
-        f"[LangGraph: 청크별 요약] 시작 (video_id: {video_id}, 청크 수: {len(chunks)})"
+        f"[LangGraph: 청크별 요약] 시작 (video_id: {video_id}, 청크 수: {len(chunks)}, 병렬 처리)"
     )
 
-    summarized_chunks = []
-    for chunk in chunks:
-        try:
-            response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "너는 유튜브 영상의 텍스트 조각을 요약하는 AI야. "
-                            "핵심 인사이트와 정보 위주로 2~3문장으로 간결하게 요약해. "
-                            "불필요한 인트로, 인사말, 광고 문구는 무시해."
-                        ),
-                    },
-                    {"role": "user", "content": chunk["content"]},
-                ],
-            )
-            summary = response.choices[0].message.content.strip()
-            if response.usage:
-                logger.info(f"  [토큰 사용량] 청크 요약: {response.usage.total_tokens}")
-        except Exception as e:
-            logger.warning(f"  청크 {chunk.get('chunk_order', '?')} 요약 실패: {e}")
-            summary = chunk.get("content", "")[:100] + "..."
-
-        summarized_chunks.append({**chunk, "summary": summary})
-        # logger.info(f"  청크 요약 내용 {summarized_chunks}")
-        logger.info(f"  청크 {chunk.get('chunk_order', '?')} 요약 완료")
+    # ThreadPoolExecutor를 사용해 최대 10개의 워커로 병렬 요청 수행
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # map을 사용하면 원래 chunks의 순서를 유지하면서 결과 반환
+        results = executor.map(_process_single_chunk, chunks)
+        summarized_chunks = list(results)
 
     return {"summarized_chunks": summarized_chunks}
 

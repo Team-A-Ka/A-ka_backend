@@ -148,65 +148,38 @@ async def create_base(video_id: str):
         return await repo.create_initial_record(video_id)
 
 
-# DB의 embedding 컬럼에 숫자를 채워 넣는 함수
-async def _update_chunk_embeddings(result_chunks: list):
-    """각 Chunk의 ID를 찾아 AI가 만든 벡터 숫자를 업데이트합니다."""
-    async with async_session_maker() as session:
-        async with session.begin():
-            for chunk_data in result_chunks:
-                # AI가 돌려준 데이터에 id와 벡터값(embedding)이 있을 때만 작동
-                if "id" in chunk_data and "embedding" in chunk_data:
-                    stmt = (
-                        update(YoutubeKnowledgeChunk)
-                        .where(YoutubeKnowledgeChunk.id == chunk_data["id"])
-                        .values(embedding=chunk_data["embedding"])
-                    )
-                    await session.execute(stmt)
-        await session.commit()
+async def _get_latest_knowledge_id(session, video_id: str):
+    """주어진 video_id에 해당하는 가장 최근 Knowledge 레코드의 ID를 반환합니다."""
+    result = await session.execute(
+        select(Knowledge.id)
+        .join(YoutubeMetadata, YoutubeMetadata.knowledge_id == Knowledge.id)
+        .where(YoutubeMetadata.video_id == video_id)
+        .order_by(Knowledge.created_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
 
 
 # ==========================================
-# Step 2 결과 반영 — LangGraph 산출물 DB UPDATE  [추가: 채훈, #2]
+# Step 2 결과 반영 — LangGraph 산출물 DB 단일 트랜잭션 UPDATE
 # ==========================================
-async def update_knowledge_after_langgraph(
+async def save_intelligence_result(
     video_id: str,
     title: str,
     summary: str,
     summarized_chunks: list,
 ):
-    """LangGraph 실행 결과를 Knowledge + YoutubeKnowledgeChunk 에 반영.
-
-    Knowledge 측:
-      - title    ← LangGraph generate_overview 결과
-      - summary  ← full_summary
-
-    YoutubeKnowledgeChunk 측:
-      - summary_detail ← chunk_order 별로 chunk["summary"]
-
-    주의 / TODO:
-      - category_id 는 #6 작업(카테고리 이름 → ID lookup/create) 완료 후 이 함수에 추가 예정.
-      - embedding 컬럼은 #7 작업(YoutubeKnowledgeChunk.embedding) 완료 후 별도 함수에서 처리.
-      - knowledge_id 매칭은 video_id 기반 (save_chunks_to_db 패턴 재사용).
+    """LangGraph 실행 결과(텍스트 요약 + 임베딩 벡터)를 단일 트랜잭션으로 DB에 한 번에 반영.
+    - 데이터 불일치(고스트 데이터) 방지
     """
     async with async_session_maker() as session:
-        try:
+        async with session.begin():  # 트랜잭션 시작 (실패 시 전체 rollback 됨)
             # 1) video_id 로 가장 최근 Knowledge 찾기
-            result = await session.execute(
-                select(Knowledge.id)
-                .join(
-                    YoutubeMetadata,
-                    YoutubeMetadata.knowledge_id == Knowledge.id,
-                )
-                .where(YoutubeMetadata.video_id == video_id)
-                .order_by(Knowledge.created_at.desc())
-                .limit(1)
-            )
-            knowledge_id = result.scalars().first()
+            knowledge_id = await _get_latest_knowledge_id(session, video_id)
 
             if knowledge_id is None:
                 raise Exception(
                     f"video_id={video_id} 에 해당하는 Knowledge 레코드가 없습니다. "
-                    f"(create_base / collect_and_chunk 가 먼저 실행됐는지 확인)"
                 )
 
             # 2) Knowledge — title, summary UPDATE
@@ -216,32 +189,27 @@ async def update_knowledge_after_langgraph(
                 .values(title=title, summary=summary)
             )
 
-            # 3) YoutubeKnowledgeChunk — chunk_order 별로 summary_detail UPDATE
+            # 3) YoutubeKnowledgeChunk — summary_detail 및 embedding 동시 UPDATE (Bulk Update)
+            update_data = []
             for chunk in summarized_chunks:
-                order = chunk.get("chunk_order")
-                summary_detail = chunk.get("summary", "")
-                if order is None:
-                    continue
-                await session.execute(
-                    update(YoutubeKnowledgeChunk)
-                    .where(
-                        YoutubeKnowledgeChunk.knowledge_id == knowledge_id,
-                        YoutubeKnowledgeChunk.chunk_order == order,
-                    )
-                    .values(summary_detail=summary_detail)
-                )
+                if "id" in chunk and "summary" in chunk:
+                    chunk_update = {
+                        "id": chunk["id"],
+                        "summary_detail": chunk["summary"]
+                    }
+                    if "embedding" in chunk:
+                        chunk_update["embedding"] = chunk["embedding"]
+                    
+                    update_data.append(chunk_update)
+            
+            if update_data:
+                await session.execute(update(YoutubeKnowledgeChunk), update_data)
 
-            await session.commit()
             logger.info(
-                f"[Step 2] Knowledge UPDATE 완료: knowledge_id={knowledge_id}, "
-                f"title='{title[:30]}', chunks={len(summarized_chunks)}개 summary_detail 반영"
+                f"[Step 2] Knowledge & Embeddings 단일 트랜잭션 UPDATE 완료: "
+                f"knowledge_id={knowledge_id}, chunks={len(update_data)}개 반영"
             )
             return knowledge_id
-
-        except Exception as e:
-            await session.rollback()
-            logger.error(f"[Step 2] DB UPDATE 실패: {e}")
-            raise
 
 
 # ==========================================
@@ -311,17 +279,7 @@ async def mark_completed(video_id: str):
     """
     async with async_session_maker() as session:
         try:
-            result = await session.execute(
-                select(Knowledge.id)
-                .join(
-                    YoutubeMetadata,
-                    YoutubeMetadata.knowledge_id == Knowledge.id,
-                )
-                .where(YoutubeMetadata.video_id == video_id)
-                .order_by(Knowledge.created_at.desc())
-                .limit(1)
-            )
-            knowledge_id = result.scalars().first()
+            knowledge_id = await _get_latest_knowledge_id(session, video_id)
 
             if knowledge_id is None:
                 logger.warning(
@@ -362,17 +320,7 @@ async def mark_failed(video_id: str, reason: str = ""):
     """
     async with async_session_maker() as session:
         try:
-            result = await session.execute(
-                select(Knowledge.id)
-                .join(
-                    YoutubeMetadata,
-                    YoutubeMetadata.knowledge_id == Knowledge.id,
-                )
-                .where(YoutubeMetadata.video_id == video_id)
-                .order_by(Knowledge.created_at.desc())
-                .limit(1)
-            )
-            knowledge_id = result.scalars().first()
+            knowledge_id = await _get_latest_knowledge_id(session, video_id)
 
             if knowledge_id is None:
                 logger.warning(

@@ -124,8 +124,9 @@ def generate_answer(state: SearchState) -> dict:
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
         title = chunk.get("title", "알 수 없는 영상")
+        url = chunk.get("original_url", "")
         content = chunk.get("summary_detail") or chunk.get("content", "")
-        context_parts.append(f"[출처 {i}: {title}]\n{content}")
+        context_parts.append(f"[출처 {i}: {title} ({url})]\n{content}")
 
     context_text = "\n\n".join(context_parts)
 
@@ -139,6 +140,7 @@ def generate_answer(state: SearchState) -> dict:
                         "너는 사용자가 저장한 유튜브 영상 내용을 기반으로 답변하는 AI 어시스턴트야. "
                         "아래 [검색 결과]는 사용자가 이전에 저장한 영상의 관련 내용이야. "
                         "이 내용을 근거로 질문에 답변해. "
+                        "답변 시, 참고한 출처의 URL을 함께 명시해줘. "
                         "검색 결과에 없는 내용은 추측하지 말고 '저장된 영상에서는 해당 내용을 찾지 못했어요'라고 답해. "
                         "답변은 친절하고 간결하게 3~5문장으로 하고 반말은 하지 않는다."
                     ),
