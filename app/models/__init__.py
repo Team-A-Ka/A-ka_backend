@@ -1,4 +1,5 @@
 from database import Base
+from app.models.notion import NotionConnection
 from app.models.user import User, UserChannelIdentity
 from app.models.category import Category
 from app.models.knowledge import (
@@ -13,6 +14,7 @@ __all__ = [
     "Base",
     "User",
     "UserChannelIdentity",
+    "NotionConnection",
     "Category",
     "Knowledge",
     "YoutubeMetadata",
