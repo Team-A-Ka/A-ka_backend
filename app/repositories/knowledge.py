@@ -57,7 +57,7 @@ class KnowledgeRepository:
             logger.error(f"최초 레코드 생성 실패: {e}")
             raise
 
-    def find_by_user_and_video_id(self, db, user_id: str, video_id: str):
+    def find_by_user_and_video_id(self, db, user_id: int, video_id: str):
         return db.query(Knowledge).join(YoutubeMetadata)
 
 
