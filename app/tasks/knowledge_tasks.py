@@ -9,6 +9,7 @@ import asyncio
 
 from celery import chain
 from app.core.celery_app import celery_app
+from celery import shared_task
 from celery.utils.log import get_task_logger
 from app.repositories.knowledge import create_base, mark_failed
 from app.services.knowledge_pipeline import KnowledgePipelineService
