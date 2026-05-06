@@ -161,9 +161,7 @@ class KnowledgePipelineService:
                 summary=full_summary,
                 existing_categories=existing_categories,
             )
-            logger.info(
-                f"[Category] raw={raw_category}, resolved={resolved_category}"
-            )
+            logger.info(f"[Category] raw={raw_category}, resolved={resolved_category}")
 
             db_result = run_async(
                 update_summary_result_to_db(

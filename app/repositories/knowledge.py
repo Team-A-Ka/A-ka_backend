@@ -146,7 +146,7 @@ async def create_base(video_id: str, user_id: int = 1):
 
 def normalize_category_name(category_name: str | None) -> str:
     name = (category_name or "").strip().replace(" ", "")
-    return name[:50] or "기타"
+    return name[:50] or "미분류"
 
 
 async def list_category_names() -> list[str]:
@@ -257,7 +257,11 @@ async def update_knowledge_after_langgraph(
             raise
 
 
-async def save_link_only(video_id: str, metadata: dict, user_id: int = 1):
+async def save_link_only(
+    video_id: str,
+    metadata: dict,
+    user_id: int = 1,
+):
     knowledge_id = uuid.uuid4()
 
     async with async_session_maker() as session:

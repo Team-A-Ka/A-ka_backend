@@ -64,7 +64,6 @@ _CHUNK_REQUEST_EXAMPLE = {
 def chunk_transcript(
     body: TranscriptChunkRequest = Body(..., examples=[_CHUNK_REQUEST_EXAMPLE]),
 ) -> list[dict]:
-    """Fetch, refine, and chunk a transcript using the selected strategy."""
     raw = youtube_service.get_transcript(body.video_id)
     if isinstance(raw, str):
         raise HTTPException(status_code=400, detail=raw)

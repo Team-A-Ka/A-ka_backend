@@ -1,9 +1,15 @@
+# 실패 시 retry / 재시도 제어
+# service/repository 호출 + retry/failure 제어
+
+# tasks.py
+#  ├── service 호출
+#  ├── retry 처리
+
 import asyncio
 
 from celery import chain
-from celery.utils.log import get_task_logger
-
 from app.core.celery_app import celery_app
+from celery.utils.log import get_task_logger
 from app.repositories.knowledge import create_base, mark_failed
 from app.services.knowledge_pipeline import KnowledgePipelineService
 from app.services.save_only_service import SaveOnlyService
@@ -14,59 +20,93 @@ knowledge_pipeline_service = KnowledgePipelineService()
 save_only_service = SaveOnlyService()
 
 
+# ==========================================
+# Step 1: 수집 + 청킹
+# ==========================================
 @celery_app.task(bind=True, name="knowledge.collect_and_chunk")
-def collect_and_chunk_task(self, video_id: str, user_id: str | int | None = None):
-    return knowledge_pipeline_service.collect_and_chunk(video_id, user_id)
+def collect_and_chunk_task(self, video_id: str):
+    return knowledge_pipeline_service.collect_and_chunk(video_id)
 
 
-@celery_app.task(bind=True, name="knowledge.run_intelligence")
+# ==========================================
+# Step 2: AI 추론 그래프
+# ==========================================
+@shared_task(bind=True, name="knowledge.run_intelligence")
 def run_intelligence_graph_task(self, data: dict):
+
     return knowledge_pipeline_service.run_intelligence(data)
 
 
-@celery_app.task(bind=True, name="knowledge.update_status")
+# ==========================================
+# Step 3: 완료 처리
+# ==========================================
+@shared_task(bind=True, name="knowledge.update_status")
 def update_pipeline_status_task(self, data: dict):
     return knowledge_pipeline_service.publish_pipeline_result(data)
 
 
-@celery_app.task(bind=True, name="knowledge.handle_failure")
+# ==========================================
+# 에러 핸들러
+# ==========================================
+@shared_task(bind=True, name="knowledge.handle_failure")
 def handle_pipeline_failure_task(self, task_id, video_id: str):
     return knowledge_pipeline_service.handle_failure(video_id, task_id)
 
 
-@celery_app.task(bind=True, name="knowledge.save_link_only", max_retries=3)
-def save_link_only_task(self, video_id: str):
+# ==========================================
+# 단순 링크 저장 (SAVE_ONLY) 진입점
+# ==========================================
+@shared_task(bind=True, name="knowledge.save_link_only", max_retries=3)
+def save_link_only_task(self, video_id: str, user_id: int):
+    """
+    LangGraph 요약을 타지 않고 단순 링크만 저장.
+    Celery retry 모두 소진 시 status=FAILED 마킹 후 raise.
+    """
     try:
-        return save_only_service.save(video_id)
+        return save_only_service.save(video_id, user_id)
+
     except Exception as exc:
+        # 재시도 여력 있으면 retry, 없으면 status=FAILED 마킹 후 최종 raise
         try:
             raise self.retry(exc=exc, countdown=5)
         except self.MaxRetriesExceededError:
-            logger.error(f"[SAVE_ONLY] Max retries exceeded: video_id={video_id}")
+            logger.error(
+                f"[SAVE_ONLY] 최대 재시도 초과 — status=FAILED 마킹 (video_id: {video_id})"
+            )
             try:
-                asyncio.run(mark_failed(video_id, reason=f"SAVE_ONLY failed: {exc}"))
-            except Exception as mark_exc:
-                logger.error(f"[SAVE_ONLY] Failed to mark failed: {mark_exc}")
+                asyncio.run(mark_failed(video_id, reason=f"SAVE_ONLY 최종 실패: {exc}"))
+            except Exception as e:
+                logger.error(f"[SAVE_ONLY] mark_failed 호출 실패: {e}")
             raise
 
 
-def run_core_pipeline_task(video_id: str, user_id: str | int | None = None) -> str:
-    logger.info(f"====== Pipeline trigger (video_id: {video_id}) ======")
+# ==========================================
+# ⭐️ 파이프라인 진입점 — chat_command.py에서 호출
+# ==========================================
+def run_core_pipeline_task(video_id: str, user_id: int):
+    """
+    실행 순서 (순차 chain):
+    (수집+청킹) → (LangGraph: 요약→벡터화→개요) → (완료)
+    """
+    logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
     try:
-        knowledge_user_id = (
-            int(user_id) if user_id is not None and str(user_id).isdigit() else 1
-        )
-        knowledge_db_id = asyncio.run(create_base(video_id, knowledge_user_id))
-        logger.info(f"DB initial record created: {knowledge_db_id}")
-    except Exception as exc:
-        logger.error(f"Failed to start pipeline during DB initialization: {exc}")
-        raise
+        # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
+        knowledge_db_id = asyncio.run(create_base(video_id,user_id))
+        logger.info(f"DB 초기 레코드 생성 성공: {knowledge_db_id}")
+
+    except Exception as e:
+        logger.error(f"파이프라인 시작 실패 (DB 초기화 에러): {e}")
+        return "Failed to start pipeline: DB Error"
 
     workflow = chain(
-        collect_and_chunk_task.s(video_id, user_id),
-        run_intelligence_graph_task.s(),
-        update_pipeline_status_task.s(),
+        collect_and_chunk_task.s(video_id),  # Step 1: 현지/수왕
+        run_intelligence_graph_task.s(),  # Step 2: 채훈 (LangGraph)
+        update_pipeline_status_task.s(),  # Step 3: 완료
     ).on_error(handle_pipeline_failure_task.s(video_id))
 
-    result = workflow.delay()
-    return result.id
+    workflow.delay()
+
+    return {
+        "video_id": video_id,
+        # "status": "QUEUED", 흠!!!!!!!
+    }
