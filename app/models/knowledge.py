@@ -15,7 +15,6 @@ class SourceType(enum.Enum):
 
 class ProcessStatus(enum.Enum):
     PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
