@@ -15,6 +15,11 @@ class Settings(BaseSettings):
 
     PROJECT_NAME: str = "A-Ka Backend"
 
+    # Auth
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_MINUTES: int = 30
+
     # Database
     # Docker가 아닌 로컬 네이티브 환경(Windows)에 구동 중인 DB를 바라보도록 설정되어 있습니다.
     POSTGRES_USER: str = "postgres"
@@ -39,6 +44,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 # 싱글톤처럼 애플리케이션 어디서든 import settings 하여 접근 가능하게 인스턴스화합니다.
