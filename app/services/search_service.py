@@ -104,6 +104,10 @@ def search_chunks(state: SearchState) -> dict:
         session.close()
 
     logger.info(f"[SEARCH 노드2: 검색] 완료 — {len(chunks)}개 청크 발견")
+    for i, c in enumerate(chunks, 1):
+        dist = c.get('distance', '?')
+        title = c.get('title', '?')
+        logger.info(f"  [매칭 {i}] distance={dist:.4f} | {title}")
     return {"chunks": chunks, "sources": len(chunks)}
 
 
@@ -155,6 +159,9 @@ def generate_answer(state: SearchState) -> dict:
         answer = "답변 생성 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
 
     logger.info(f"[SEARCH 노드3: RAG 답변] 완료")
+    logger.info(f"========== [AI 답변 내용] ==========")
+    logger.info(f"{answer}")
+    logger.info(f"====================================")
     return {"answer": answer}
 
 

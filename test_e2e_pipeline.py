@@ -18,9 +18,26 @@ from app.core.config import settings
 # DB 연결 엔진 설정
 engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
 
-# 완전히 새로운 랜덤 사용자 생성 (하드코딩 방지 검증용)
-TEST_USER_ID = f"test_user_{uuid.uuid4().hex[:8]}"
-print(f"[*] 테스트에 사용할 신규 카카오 유저 ID: {TEST_USER_ID}")
+# 실행마다 새로운 랜덤 카카오 ID 생성 — 이전 유저의 COMPLETED 데이터를 오타하지 않도록
+TEST_USER_ID = f"e2e_test_{uuid.uuid4().hex[:8]}"
+print(f"[*] 테스트 카카오 User ID: {TEST_USER_ID}")
+
+
+def get_internal_user_id(kakao_id: str) -> int | None:
+    """카카오 ID → user_channel_identity → user.id 조회"""
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                """
+                SELECT u.id FROM "user" u
+                JOIN user_channel_identity uci ON uci.user_id = u.id
+                WHERE uci.provider = 'kakao' AND uci.provider_user_id = :kid
+                """
+            ),
+            {"kid": kakao_id},
+        ).fetchone()
+        return result[0] if result else None
+
 
 def send_webhook(utterance: str, intent_name: str = "test"):
     url = "http://localhost:8000/api/v1/chat/webhook"
@@ -45,11 +62,9 @@ def send_webhook(utterance: str, intent_name: str = "test"):
         sys.exit(1)
 
 
-def wait_for_knowledge_status(video_id: str, timeout: int = 180):
-    """지정된 video_id의 Knowledge.status가 COMPLETED 또는 FAILED가 될 때까지 대기"""
-    print(
-        f"⏳ Celery 파이프라인 처리 대기 중... (video_id: {video_id}, 최대 {timeout}초)"
-    )
+def wait_for_knowledge_status(video_id: str, internal_user_id: int, timeout: int = 180):
+    """user_id + video_id 기준으로 Knowledge.status가 COMPLETED/FAILED가 될 때까지 대기"""
+    print(f"⏳ 처리 대기 중... (User: {internal_user_id}, video: {video_id}, 최대 {timeout}초)")
     start_time = time.time()
 
     with engine.connect() as conn:
@@ -57,14 +72,14 @@ def wait_for_knowledge_status(video_id: str, timeout: int = 180):
             result = conn.execute(
                 text(
                     """
-                    SELECT k.status 
+                    SELECT k.status
                     FROM knowledge k
                     JOIN youtube_metadata ym ON k.id = ym.knowledge_id
-                    WHERE ym.video_id = :video_id
+                    WHERE ym.video_id = :video_id AND k.user_id = :user_id
                     ORDER BY k.created_at DESC LIMIT 1
                     """
                 ),
-                {"video_id": video_id},
+                {"video_id": video_id, "user_id": internal_user_id},
             ).fetchone()
 
             if result:
@@ -98,8 +113,16 @@ def run_e2e_tests():
     res, latency = send_webhook(utterance_upload)
     print(f"✅ 웹훅 응답 수신 (지연시간: {latency:.4f}초)")
 
-    # 워커가 처리할 때까지 대기
-    if not wait_for_knowledge_status(video_id_upload):
+    # 웹훅 호출 후 DB에 유저가 생성될 때까지 잠시 대기
+    time.sleep(2)
+    internal_id = get_internal_user_id(TEST_USER_ID)
+    if not internal_id:
+        print("❌ 오류: 유저가 DB에 생성되지 않았습니다.")
+        sys.exit(1)
+    print(f"[*] 확인된 내부 User ID: {internal_id}")
+
+    # 현재 유저의 UPLOAD 파이프라인 완료까지 대기
+    if not wait_for_knowledge_status(video_id_upload, internal_id):
         print("중단: UPLOAD 파이프라인 실패")
         sys.exit(1)
 
@@ -111,8 +134,8 @@ def run_e2e_tests():
     res, latency = send_webhook(utterance_save)
     print(f"✅ 웹훅 응답 수신 (지연시간: {latency:.4f}초)")
 
-    # 워커가 처리할 때까지 대기 (SAVE_ONLY는 매우 빠름)
-    if not wait_for_knowledge_status(video_id_save_only, timeout=30):
+    # 현재 유저의 SAVE_ONLY 완료까지 대기
+    if not wait_for_knowledge_status(video_id_save_only, internal_id, timeout=30):
         print("중단: SAVE_ONLY 파이프라인 실패")
         sys.exit(1)
 
@@ -123,15 +146,23 @@ def run_e2e_tests():
 
     res, latency = send_webhook(utterance_search)
     print(f"✅ 웹훅 응답 수신 (지연시간: {latency:.4f}초)")
+    print(f"   (카카오 5초 규약: 즉시 OK 반환 — AI 답변은 Celery 워커에서 비동기 처리)")
 
-    # 참고: 현재 SEARCH 응답은 Celery 워커의 로그에만 남고 웹훅 응답은 항상 '서버 연결 성공'임
-    print(
-        f"💡 (검색 결과는 워커 로그를 확인해주세요. 응답 메시지: {res['template']['outputs'][0]['simpleText']['text']})"
-    ) 
+    # SEARCH Celery 처리 대기 (데이터가 확실히 적재된 후라 짧게)
+    print("⏳ Celery SEARCH 처리 대기 중 (최대 10초)...", end="", flush=True)
+    for _ in range(5):
+        time.sleep(2)
+        print(".", end="", flush=True)
+    print(" 완료!")
 
     print("\n" + "=" * 60)
     print("🎉 모든 E2E 테스트 시나리오 통과 완료!")
     print("=" * 60)
+    print("\n📋 [SEARCH 결과 확인]")
+    print("   Celery 워커 로그에서 아래 키워드를 찾으세요:")
+    print("   1. '[AI Router] intent=SEARCH'       → 의도 분류 확인")
+    print("   2. '[SEARCH 노드2: 검색] 완료'        → pgvector 검색 결과")
+    print("   3. '===== [AI 답변 내용] ====='       → 최종 AI 답변")
 
 
 if __name__ == "__main__":
