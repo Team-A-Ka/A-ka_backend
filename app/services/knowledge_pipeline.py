@@ -254,11 +254,35 @@ async def check_duplicate_hit_count(video_id: str, user_id: int):
         if not existing_knowledge:
             return None
 
-        updated_knowledge = await knowledge_repository.increase_hit_count(
-            existing_knowledge
-        )
+        # FAILED면 hit_count 증가 X
+        if existing_knowledge.status == "FAILED":
+            return {
+                "knowledge_id": str(existing_knowledge.id),
+                "hit_count": existing_knowledge.hit_count,
+                "status": existing_knowledge.status,
+                "duplicate": True,
+                "counted": False,
+            }
 
+        # COMPLETED 상태일 때만 hit_count 증가
+        if existing_knowledge.status == "COMPLETED":
+            updated_knowledge = await knowledge_repository.increase_hit_count(
+                existing_knowledge
+            )
+
+            return {
+                "knowledge_id": str(updated_knowledge.id),
+                "hit_count": updated_knowledge.hit_count,
+                "status": updated_knowledge.status,
+                "duplicate": True,
+                "counted": True,
+            }
+
+        # PROCESSING 등은 증가 X
         return {
-            "knowledge_id": str(updated_knowledge.id),
-            "hit_count": updated_knowledge.hit_count,
+            "knowledge_id": str(existing_knowledge.id),
+            "hit_count": existing_knowledge.hit_count,
+            "status": existing_knowledge.status,
+            "duplicate": True,
+            "counted": False,
         }
