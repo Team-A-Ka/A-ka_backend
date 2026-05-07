@@ -5,26 +5,21 @@
 - 비동기 세션: Celery 워커 내부의 고성능 비동기 DB 작업에 사용
 """
 
-import os
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, NullPool
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-
-# 환경 변수 로드
-load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL 환경변수가 설정되어 있지 않습니다.")
+from app.core.config import settings
 
 
 # ==========================================
 # DB URL 구성
+# DATABASE_URL 하나만 쓰고, sync/async 드라이버는 여기서 자동 파생.
 # ==========================================
 
+DATABASE_URL = settings.database_url
+
+# 사용자가 .env에 어떤 형태로 넣어도, 자동으로 sync/async 양쪽 URL 생성
 SYNC_DATABASE_URL = DATABASE_URL.replace(
     "postgresql+asyncpg://",
     "postgresql://",
