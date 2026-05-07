@@ -144,7 +144,7 @@ def run_e2e_tests():
     # 3. SEARCH (RAG 검색) 테스트
     print("\n[테스트 3] SEARCH 의도 웹훅 전송 (RAG 파이프라인)")
     # 테스트 1에서 올린 와인 영상을 바탕으로 질문
-    utterance_search = "와인이 두통을 유발하는 이유를 3줄로 설명해줘"
+    utterance_search = "THC와 CBD의 차이를 설명해줘"
 
     res, latency = send_webhook(utterance_search)
     print(f"✅ 웹훅 응답 수신 (지연시간: {latency:.4f}초)")

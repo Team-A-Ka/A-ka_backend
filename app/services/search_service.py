@@ -59,9 +59,9 @@ def search_chunks(state: SearchState) -> dict:
     추후 그래프 전체를 ainvoke로 전환하면 async_session_maker로 갈아끼울 것.
     """
     query_vector = state.get("query_vector", [])
-    user_id_raw = state.get("user_id", "")  # 카카오 string user_id
+    internal_user_id = state.get("user_id")
 
-    logger.info(f"[SEARCH 노드2: 검색] 시작 (kakao_user_id={user_id_raw})")
+    logger.info(f"[SEARCH 노드2: 검색] 시작 (user_id={internal_user_id})")
 
     if not query_vector:
         logger.warning("[SEARCH 노드2] query_vector 비어있음 — 검색 스킵")
@@ -91,7 +91,7 @@ def search_chunks(state: SearchState) -> dict:
             ),
             {
                 "query_vec": vector_str,
-                "user_id": user_id_raw,
+                "user_id": internal_user_id,
                 "top_k": SEARCH_TOP_K,
                 "threshold": DISTANCE_THRESHOLD,
             },
