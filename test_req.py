@@ -3,7 +3,7 @@ import json
 import time
 
 data = json.dumps({
-    'userRequest': {'user': {'id': 'test_user'}, 'utterance': 'https://www.youtube.com/watch?v=PWoOTBP7JGw 나중에 이 영상 볼거니까 대충 어떤 영상인지 간단히 요약해줘'},
+    'userRequest': {'user': {'id': 'test_user'}, 'utterance': 'https://www.youtube.com/watch?v=7z8F4a5Qg10&t=54s 나중에 이 영상 볼거니까 대충 어떤 영상인지 간단히 요약해줘'},
     'action': {'name': 'test'}
 }).encode('utf-8')
 

@@ -45,11 +45,14 @@ class ChatCommandService:
                         {
                             "role": "system",
                             "content": (
-                                "사용자의 입력을 분석해 의도를 분류한다. "
-                                "유튜브 링크만 보내거나 요약/분석/저장을 요청하면 UPLOAD다. "
-                                "'링크만 저장', '요약하지 말고 저장'처럼 명시하면 SAVE_ONLY다. "
-                                "이전에 저장한 정보에 대한 질문이면 SEARCH다. "
-                                "그 외는 UNKNOWN이다. URL이 있으면 detected_url에 그대로 추출한다."
+                                "사용자의 입력을 분석해 의도를 분류한다.\n"
+                                "UPLOAD: 유튜브 URL이 포함되어 있고, 요약/분석을 요청하거나 URL만 보낸 경우.\n"
+                                "SAVE_ONLY: 유튜브 URL이 포함되어 있고, '저장만', '요약 말고 저장' 등 저장만 명시한 경우.\n"
+                                "SEARCH: URL 없이 정보·지식·내용을 묻거나 설명을 요청하는 질문. "
+                                "예: '와인이 두통을 유발하는 이유는?', 'AI의 미래에 대해 알려줘', '어제 본 영상에서 뭐라고 했어?'\n"
+                                "UNKNOWN: 인사말, 의미 없는 텍스트, 단순 감탄사 등 위 어디에도 해당하지 않는 경우. "
+                                "예: '안녕', 'ㅋㅋ', '고마워'\n"
+                                "URL이 있으면 detected_url에 그대로 추출한다."
                             ),
                         },
                         {"role": "user", "content": user_message},
@@ -124,6 +127,7 @@ class ChatCommandService:
             "user_id": user_id,
             "result": search_result,
         }
+
 
     @staticmethod
     def parse_youtube_video_id(url: str | None) -> str | None:

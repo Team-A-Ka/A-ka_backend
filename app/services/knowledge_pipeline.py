@@ -106,17 +106,10 @@ class KnowledgePipelineService:
         user_id = data.get("user_id")
 
         if not chunks:
-            logger.warning(f"[Step 2] chunks empty, skipping LangGraph: {video_id}")
-            return {
-                "video_id": video_id,
-                "user_id": user_id,
-                "metadata": metadata,
-                "title": f"Video {video_id}",
-                "full_summary": "Could not extract transcript, so no summary was generated.",
-                "category": "미분류",
-                "vector_count": 0,
-                "summarized_chunks": [],
-            }
+            reason = f"자막/STT 추출 후 chunks 없음 (video_id={video_id})"
+            logger.warning(f"[Step 2] {reason}")
+            run_async(mark_failed(video_id, reason=reason))
+            raise ValueError(reason)
 
         result = self.intelligence_service.run(
             {

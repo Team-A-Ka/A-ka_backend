@@ -11,8 +11,10 @@ LangGraph 흐름:
 import logging
 from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
+from sqlalchemy import text
 from app.core.config import settings
 from app.schemas.graph_state import SearchState
+from database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -42,40 +44,70 @@ def vectorize_query(state: SearchState) -> dict:
 # ==========================================
 # LangGraph 노드 2: pgvector 유사도 검색
 # ==========================================
+# 검색 결과 상한 — 너무 많이 가져오면 RAG 컨텍스트 비용↑·답변 품질↓
+SEARCH_TOP_K = 5
+
+# 코사인 거리 임계값 — 0(완전 동일) ~ 2(완전 반대). 0.7 초과 시 무관련 청크로 판단해 제거.
+# RAG 답변 품질 보고 올리거나 낮춰서 튜닝 가능.
+DISTANCE_THRESHOLD = 0.7
+
+
 def search_chunks(state: SearchState) -> dict:
-    """pgvector에서 유사도 높은 청크 검색"""
+    """pgvector 코사인 거리(<=>) 기반 유사도 상위 K개 청크 조회.
+
+    동기 SessionLocal 사용 — LangGraph 그래프가 동기 invoke 흐름이라 일관성 유지.
+    추후 그래프 전체를 ainvoke로 전환하면 async_session_maker로 갈아끼울 것.
+    """
     query_vector = state.get("query_vector", [])
-    user_id = state.get("user_id", "")
+    internal_user_id = state.get("user_id")
 
-    logger.info(f"[SEARCH 노드2: 검색] 시작")
+    logger.info(f"[SEARCH 노드2: 검색] 시작 (user_id={internal_user_id})")
 
-    # ── 수정 포인트 (유리) ──
-    # 유리님이 embedding 컬럼을 추가한 후 아래 실제 쿼리로 교체
-    # session = SessionLocal()
-    # try:
-    #     vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
-    #     result = session.execute(
-    #         text("""
-    #             SELECT kc.content, kc.summary_detail, k.title, k.original_url,
-    #                    kc.embedding <=> :query_vec AS distance
-    #             FROM youtube_knowledge_chunk kc
-    #             JOIN knowledge k ON kc.knowledge_id = k.id
-    #             WHERE k.user_id = :user_id
-    #               AND kc.embedding IS NOT NULL
-    #             ORDER BY kc.embedding <=> :query_vec
-    #             LIMIT 5
-    #         """),
-    #         {"query_vec": vector_str, "user_id": user_id}
-    #     )
-    #     chunks = [dict(row._mapping) for row in result]
-    # finally:
-    #     session.close()
+    if not query_vector:
+        logger.warning("[SEARCH 노드2] query_vector 비어있음 — 검색 스킵")
+        return {"chunks": [], "sources": 0}
 
-    # 더미 결과 (pgvector 세팅 전까지 사용)
-    logger.warning("[SEARCH 노드2] pgvector 미구성 — 더미 검색 결과 반환")
-    chunks = []
+    # pgvector 리터럴 — psycopg2/asyncpg 둘 다 안전하게 받는 string 형식
+    vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+
+    session = SessionLocal()
+    try:
+        result = session.execute(
+            text(
+                """
+                SELECT kc.content,
+                       kc.summary_detail,
+                       k.title,
+                       k.original_url,
+                       kc.embedding <=> CAST(:query_vec AS vector) AS distance
+                FROM youtube_knowledge_chunk kc
+                JOIN knowledge k ON kc.knowledge_id = k.id
+                WHERE k.user_id = :user_id
+                  AND kc.embedding IS NOT NULL
+                  AND kc.embedding <=> CAST(:query_vec AS vector) < :threshold
+                ORDER BY kc.embedding <=> CAST(:query_vec AS vector)
+                LIMIT :top_k
+                """
+            ),
+            {
+                "query_vec": vector_str,
+                "user_id": internal_user_id,
+                "top_k": SEARCH_TOP_K,
+                "threshold": DISTANCE_THRESHOLD,
+            },
+        )
+        chunks = [dict(row._mapping) for row in result]
+    except Exception as e:
+        logger.error(f"[SEARCH 노드2] pgvector 쿼리 실패: {e}")
+        chunks = []
+    finally:
+        session.close()
 
     logger.info(f"[SEARCH 노드2: 검색] 완료 — {len(chunks)}개 청크 발견")
+    for i, c in enumerate(chunks, 1):
+        dist = c.get('distance', '?')
+        title = c.get('title', '?')
+        logger.info(f"  [매칭 {i}] distance={dist:.4f} | {title}")
     return {"chunks": chunks, "sources": len(chunks)}
 
 
@@ -92,8 +124,9 @@ def generate_answer(state: SearchState) -> dict:
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
         title = chunk.get("title", "알 수 없는 영상")
+        url = chunk.get("original_url", "")
         content = chunk.get("summary_detail") or chunk.get("content", "")
-        context_parts.append(f"[출처 {i}: {title}]\n{content}")
+        context_parts.append(f"[출처 {i}: {title} ({url})]\n{content}")
 
     context_text = "\n\n".join(context_parts)
 
@@ -107,6 +140,7 @@ def generate_answer(state: SearchState) -> dict:
                         "너는 사용자가 저장한 유튜브 영상 내용을 기반으로 답변하는 AI 어시스턴트야. "
                         "아래 [검색 결과]는 사용자가 이전에 저장한 영상의 관련 내용이야. "
                         "이 내용을 근거로 질문에 답변해. "
+                        "답변 시, 참고한 출처의 URL을 함께 명시해줘. "
                         "검색 결과에 없는 내용은 추측하지 말고 '저장된 영상에서는 해당 내용을 찾지 못했어요'라고 답해. "
                         "답변은 친절하고 간결하게 3~5문장으로 하고 반말은 하지 않는다."
                     ),
@@ -125,6 +159,9 @@ def generate_answer(state: SearchState) -> dict:
         answer = "답변 생성 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
 
     logger.info(f"[SEARCH 노드3: RAG 답변] 완료")
+    logger.info(f"========== [AI 답변 내용] ==========")
+    logger.info(f"{answer}")
+    logger.info(f"====================================")
     return {"answer": answer}
 
 

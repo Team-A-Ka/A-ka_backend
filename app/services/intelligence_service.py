@@ -10,6 +10,37 @@ logger = get_task_logger(__name__)
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
+import concurrent.futures
+
+def _process_single_chunk(chunk):
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "너는 유튜브 영상 텍스트 조각을 요약하는 AI다. "
+                        "핵심 인사이트와 정보 중심으로 2~3문장으로 간결하게 요약한다. "
+                        "불필요한 인트로, 인사, 광고 문구는 제외한다."
+                    ),
+                },
+                {"role": "user", "content": chunk["content"]},
+            ],
+        )
+        summary = response.choices[0].message.content.strip()
+        if response.usage:
+            logger.info(f"  chunk summary tokens: {response.usage.total_tokens}")
+    except Exception as exc:
+        logger.warning(
+            f"  chunk {chunk.get('chunk_order', '?')} summary failed: {exc}"
+        )
+        summary = chunk.get("content", "")[:100] + "..."
+
+    logger.info(f"  chunk {chunk.get('chunk_order', '?')} summary done")
+    return {**chunk, "summary": summary}
+
+
 def summarize_each_chunk(state: IntelligenceState) -> dict:
     video_id = state.get("video_id", "Unknown")
     chunks = state.get("chunks", [])
@@ -18,34 +49,9 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
         f"[LangGraph: chunk summary] start (video_id={video_id}, chunks={len(chunks)})"
     )
 
-    summarized_chunks = []
-    for chunk in chunks:
-        try:
-            response = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "너는 유튜브 영상 텍스트 조각을 요약하는 AI다. "
-                            "핵심 인사이트와 정보 중심으로 2~3문장으로 간결하게 요약한다. "
-                            "불필요한 인트로, 인사, 광고 문구는 제외한다."
-                        ),
-                    },
-                    {"role": "user", "content": chunk["content"]},
-                ],
-            )
-            summary = response.choices[0].message.content.strip()
-            if response.usage:
-                logger.info(f"  chunk summary tokens: {response.usage.total_tokens}")
-        except Exception as exc:
-            logger.warning(
-                f"  chunk {chunk.get('chunk_order', '?')} summary failed: {exc}"
-            )
-            summary = chunk.get("content", "")[:100] + "..."
-
-        summarized_chunks.append({**chunk, "summary": summary})
-        logger.info(f"  chunk {chunk.get('chunk_order', '?')} summary done")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = executor.map(_process_single_chunk, chunks)
+        summarized_chunks = list(results)
 
     return {"summarized_chunks": summarized_chunks}
 

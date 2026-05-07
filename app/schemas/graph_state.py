@@ -28,7 +28,7 @@ class IntelligenceState(TypedDict):
 # ==========================================
 class SearchState(TypedDict):
     """SEARCH 파이프라인 — LangGraph 노드 간 공유 상태"""
-    user_id: str
+    user_id: int
     query: str                # 사용자 질문 원문
     query_vector: list        # 질문 벡터 (1536차원)
     chunks: list              # pgvector 검색 결과
