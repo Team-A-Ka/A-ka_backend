@@ -64,7 +64,9 @@ def send_webhook(utterance: str, intent_name: str = "test"):
 
 def wait_for_knowledge_status(video_id: str, internal_user_id: int, timeout: int = 180):
     """user_id + video_id 기준으로 Knowledge.status가 COMPLETED/FAILED가 될 때까지 대기"""
-    print(f"⏳ 처리 대기 중... (User: {internal_user_id}, video: {video_id}, 최대 {timeout}초)")
+    print(
+        f"⏳ 처리 대기 중... (User: {internal_user_id}, video: {video_id}, 최대 {timeout}초)"
+    )
     start_time = time.time()
 
     with engine.connect() as conn:
@@ -107,7 +109,7 @@ def run_e2e_tests():
 
     # 1. UPLOAD (요약 포함) 테스트
     print("\n[테스트 1] UPLOAD 의도 웹훅 전송 (요약 파이프라인)")
-    video_id_upload = "7z8F4a5Qg10"  # 와인 두통 관련 영상 (약 5분)
+    video_id_upload = "F9dSJm2VPGk"  # 와인 두통 관련 영상 (약 5분)
     utterance_upload = f"https://www.youtube.com/watch?v={video_id_upload} 요약해줘"
 
     res, latency = send_webhook(utterance_upload)
