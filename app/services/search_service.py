@@ -51,10 +51,6 @@ SEARCH_TOP_K = 5
 # RAG 답변 품질 보고 올리거나 낮춰서 튜닝 가능.
 DISTANCE_THRESHOLD = 0.7
 
-# 카카오 user_id(string) → User.id(int) 매핑은 task #1 (auth_service 합의 후)에서 보강 예정.
-# 그 전까지는 시드된 임시 user.id=1을 사용.
-TEMP_USER_ID = 1
-
 
 def search_chunks(state: SearchState) -> dict:
     """pgvector 코사인 거리(<=>) 기반 유사도 상위 K개 청크 조회.
