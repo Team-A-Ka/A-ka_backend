@@ -16,6 +16,7 @@ services:
       - /app/.venv
 
   worker:
+    build: .
     image: aka-app:latest
     container_name: celery-worker
     command: celery -A app.core.celery_app worker --loglevel=info
