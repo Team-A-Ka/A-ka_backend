@@ -11,3 +11,11 @@ __pycache__
 .pytest_cache
 dist
 build4
+postgres_data/
+data/
+outputs/
+*.mp4
+*.zip
+*.tar.gz
+.vscode/
+.idea/
