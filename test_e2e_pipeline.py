@@ -11,18 +11,22 @@ import urllib.request
 import json
 import time
 import sys
+import uuid
 from sqlalchemy import create_engine, text
 from app.core.config import settings
 
 # DB 연결 엔진 설정
 engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
 
+# 완전히 새로운 랜덤 사용자 생성 (하드코딩 방지 검증용)
+TEST_USER_ID = f"test_user_{uuid.uuid4().hex[:8]}"
+print(f"[*] 테스트에 사용할 신규 카카오 유저 ID: {TEST_USER_ID}")
 
 def send_webhook(utterance: str, intent_name: str = "test"):
     url = "http://localhost:8000/api/v1/chat/webhook"
     data = json.dumps(
         {
-            "userRequest": {"user": {"id": "test_user"}, "utterance": utterance},
+            "userRequest": {"user": {"id": TEST_USER_ID}, "utterance": utterance},
             "action": {"name": intent_name},
         }
     ).encode("utf-8")

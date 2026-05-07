@@ -95,7 +95,7 @@ def search_chunks(state: SearchState) -> dict:
             ),
             {
                 "query_vec": vector_str,
-                "user_id": TEMP_USER_ID,
+                "user_id": user_id_raw,
                 "top_k": SEARCH_TOP_K,
                 "threshold": DISTANCE_THRESHOLD,
             },
