@@ -1,8 +1,5 @@
-import os
-from dotenv import load_dotenv
-from app import models 
-
-load_dotenv()
+from app import models
+from database import SYNC_DATABASE_URL
 
 from logging.config import fileConfig
 
@@ -44,9 +41,9 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url")
+    # Alembic은 항상 동기 드라이버로만 동작 -> SYNC_DATABASE_URL("postgresql://...")
     context.configure(
-        url=url,
+        url=SYNC_DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -58,7 +55,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = os.getenv("DATABASE_URL")
+    configuration["sqlalchemy.url"] = SYNC_DATABASE_URL
 
     connectable = engine_from_config(
         configuration,
@@ -67,9 +64,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
