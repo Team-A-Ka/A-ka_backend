@@ -29,11 +29,14 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "aka_db"
 
     DATABASE_URL: str | None = None
+    SYNC_DATABASE_URL: str | None = None
 
     # Redis / Celery
     # 백그라운드 큐 통신을 위한 로컬 Redis 브로커 주소입니다.
     # Windows 환경에서 localhost가 IPv6(::1)로 우선 매핑되어 Connection Refused(10061) 에러가 발생할 수 있으므로 127.0.0.1을 명시합니다.
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
+    CELERY_BROKER_URL: str | None = None
+    CELERY_RESULT_BACKEND: str | None = None
 
     # External APIs
     # LangGraph에서 활용할 OpenAI 통합과 외부 요약 적재용 Notion API 키입니다.
@@ -46,6 +49,34 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8000/api/v1/notion/oauth/callback"
     )
     NOTION_OAUTH_AUTH_URL: str = "https://api.notion.com/v1/oauth/authorize"
+
+    @property
+    def database_url(self) -> str:
+        if self.DATABASE_URL:
+            return self.DATABASE_URL
+
+        return (
+            f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
+
+    @property
+    def sync_database_url(self) -> str:
+        if self.SYNC_DATABASE_URL:
+            return self.SYNC_DATABASE_URL
+
+        return (
+            f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
+
+    @property
+    def celery_broker_url(self) -> str:
+        return self.CELERY_BROKER_URL or self.REDIS_URL
+
+    @property
+    def celery_result_backend(self) -> str:
+        return self.CELERY_RESULT_BACKEND or self.REDIS_URL
 
     class Config:
         env_file = ".env"
