@@ -1,8 +1,7 @@
-import asyncio
-
 from celery.utils.log import get_task_logger
 
 from app.repositories.knowledge import save_link_only
+from app.services.knowledge_pipeline import run_async
 from app.services.youtube_service import YouTubeService
 
 logger = get_task_logger(__name__)
@@ -17,7 +16,7 @@ class SaveOnlyService:
         title = metadata.get("video_title", f"영상 {video_id}")
 
         # DB 저장 (Knowledge + YoutubeMetadata, status=COMPLETED)
-        knowledge_id = asyncio.run(save_link_only(video_id, metadata, user_id))
+        knowledge_id = run_async(save_link_only(video_id, metadata, user_id))
 
         logger.info(f"[단순 저장 완료] knowledge_id={knowledge_id}, 제목: {title}")
         return {
