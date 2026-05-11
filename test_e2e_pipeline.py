@@ -174,4 +174,10 @@ def run_e2e_tests():
 
 
 if __name__ == "__main__":
-    run_e2e_tests()
+    # run_e2e_tests()
+        # FIND_SIMILAR 단독 테스트
+    res, latency = send_webhook(
+        "https://www.youtube.com/watch?v=TzLBgclsxmo 이 영상이랑 비슷한 거 찾아줘"
+    )
+    print(f"응답: {res}")
+    print(f"지연: {latency:.4f}초")
