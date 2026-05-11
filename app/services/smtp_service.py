@@ -133,3 +133,66 @@ def _build_html_body(
       </body>
     </html>
     """
+
+def send_search_result_email(recipient_email: str, query: str, answer: str, chunks: list) -> bool:
+    """검색된 RAG 답변과 참고 링크를 사용자에게 이메일로 발송"""
+    if not recipient_email:
+        return False
+    
+    #참고한 영상이 5개 미만일 때 중복 표시 방지 위함
+    seen_urls = set()
+    unique_sources = []
+
+    for chunk in chunks:
+        url = chunk.get("original_url")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            unique_sources.append(chunk)
+
+    subject = f"[A-ka] 요청하신 '{query[:15]}...' 검색 결과입니다"
+    
+    #참고한 영상 리스트
+    source_links = ""
+    for i, chunk in enumerate(unique_sources, 1):
+        title = chunk.get("title", "영상 제목 없음")
+        url = chunk.get("original_url", "#")
+        source_links += f"<li>{i}. <a href='{url}'>{title}</a></li>"
+
+    html_body = f"""
+    <html>
+      <body style="font-family: sans-serif; line-height: 1.6; color: #333;">
+        <h2 style="color: #4A90E2;">안녕하세요, A-ka입니다.</h2>
+        <p>질문하신 내용에 대해 저장된 영상들을 분석한 결과입니다:</p>
+        
+        <div style="background-color: #f9f9f9; padding: 20px; border-radius: 8px; border-left: 5px solid #4A90E2;">
+            <strong>질문:</strong> {query}<br><br>
+            <strong>답변:</strong> {answer.replace('\n', '<br>')}
+        </div>
+
+        <h3 style="margin-top: 30px;">참고한 영상 리스트</h3>
+        <ul>{source_links if source_links else "<li>참고한 특정 영상이 없습니다.</li>"}</ul>
+        
+        <p style="margin-top: 40px; font-size: 0.8em; color: #888;">
+            본 메일은 사용자의 요청에 의해 발송되었습니다.
+        </p>
+      </body>
+    </html>
+    """
+
+    message = EmailMessage()
+    message["From"] = settings.SMTP_USER
+    message["To"] = recipient_email
+    message["Subject"] = subject
+    message.set_content(f"질문: {query}\n\n답변: {answer}\n\n참고 영상들은 HTML 메일을 지원하는 환경에서 확인하실 수 있습니다.")
+    message.add_alternative(html_body, subtype="html")
+
+    try:
+        with smtplib.SMTP(settings.SMTP_HOST, int(settings.SMTP_PORT), timeout=10) as server:
+            server.starttls()
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+            server.send_message(message)
+        logger.info(f"검색 결과 메일 발송 완료: {recipient_email}")
+        return True
+    except Exception as e:
+        logger.error(f"메일 발송 실패: {e}")
+        return False
