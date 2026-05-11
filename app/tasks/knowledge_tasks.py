@@ -1,18 +1,9 @@
-# 실패 시 retry / 재시도 제어
-# service/repository 호출 + retry/failure 제어
-
-# tasks.py
-#  ├── service 호출
-#  ├── retry 처리
-
-import asyncio
-
 from celery import chain
 from app.core.celery_app import celery_app
 from celery import shared_task
 from celery.utils.log import get_task_logger
 from app.repositories.knowledge import create_base, mark_failed
-from app.services.knowledge_pipeline import KnowledgePipelineService, check_duplicate_hit_count
+from app.services.knowledge_pipeline import KnowledgePipelineService, check_duplicate_hit_count, run_async
 from app.services.save_only_service import SaveOnlyService
 
 logger = get_task_logger(__name__)
@@ -50,8 +41,8 @@ def update_pipeline_status_task(self, data: dict):
 # 에러 핸들러
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
-def handle_pipeline_failure_task(self, task_id, video_id: str):
-    return knowledge_pipeline_service.handle_failure(video_id, task_id)
+def handle_pipeline_failure_task(self, video_id: str, task_id: str = None):
+    return knowledge_pipeline_service.handle_failure(video_id, task_id or self.request.id)
 
 
 # ==========================================
@@ -75,7 +66,7 @@ def save_link_only_task(self, video_id: str, user_id: int):
                 f"[SAVE_ONLY] 최대 재시도 초과 — status=FAILED 마킹 (video_id: {video_id})"
             )
             try:
-                asyncio.run(mark_failed(video_id, reason=f"SAVE_ONLY 최종 실패: {exc}"))
+                run_async(mark_failed(video_id, reason=f"SAVE_ONLY 최종 실패: {exc}"))
             except Exception as e:
                 logger.error(f"[SAVE_ONLY] mark_failed 호출 실패: {e}")
             raise
@@ -91,7 +82,7 @@ def run_core_pipeline_task(video_id: str, user_id: int):
     """
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
     try:
-        duplicate_result = asyncio.run(
+        duplicate_result = run_async(
             check_duplicate_hit_count(video_id, user_id)
         )
 
@@ -109,7 +100,7 @@ def run_core_pipeline_task(video_id: str, user_id: int):
             }
     
         # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
-        knowledge_db_id = asyncio.run(create_base(video_id, user_id))
+        knowledge_db_id = run_async(create_base(video_id, user_id))
         logger.info(f"DB 초기 레코드 생성 성공: {knowledge_db_id}")
 
     except Exception as e:
@@ -117,14 +108,15 @@ def run_core_pipeline_task(video_id: str, user_id: int):
         return "Failed to start pipeline: DB Error"
 
     workflow = chain(
-        collect_and_chunk_task.s(video_id, user_id),  # Step 1: 현지/수왕
-        run_intelligence_graph_task.s(),  # Step 2: 채훈 (LangGraph)
-        update_pipeline_status_task.s(),  # Step 3: 완료
+        collect_and_chunk_task.s(video_id, user_id),
+        run_intelligence_graph_task.s(),
+        update_pipeline_status_task.s(),
     ).on_error(handle_pipeline_failure_task.s(video_id))
 
-    workflow.delay()
+    result = workflow.delay()
 
     return {
         "video_id": video_id,
-        # "status": "QUEUED", 흠!!!!!!!
+        "status": "QUEUED",
+        "task_id": result.id,
     }

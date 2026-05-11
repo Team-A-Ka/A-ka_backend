@@ -1,3 +1,5 @@
+import concurrent.futures
+
 from celery.utils.log import get_task_logger
 from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
@@ -8,9 +10,6 @@ from app.schemas.graph_state import IntelligenceState, VideoOverview
 logger = get_task_logger(__name__)
 
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
-
-
-import concurrent.futures
 
 def _process_single_chunk(chunk):
     try:

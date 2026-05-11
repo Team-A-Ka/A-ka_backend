@@ -288,7 +288,7 @@ async def update_knowledge_after_langgraph(
 async def save_link_only(
     video_id: str,
     metadata: dict,
-    user_id: int = 1,
+    user_id: int,
 ):
     knowledge_id = uuid.uuid4()
 
