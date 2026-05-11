@@ -46,11 +46,12 @@ def update_pipeline_status_task(self, data: dict):
 # 에러 핸들러
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
-def handle_pipeline_failure_task(self, task_id, video_id: str, user_id: int):
-    result = knowledge_pipeline_service.handle_failure(video_id, task_id or self.request.id)
+def handle_pipeline_failure_task(self, request, exc, traceback, video_id: str, user_id: int):
+    task_id = getattr(request, "id", None) or str(request)
+    result = knowledge_pipeline_service.handle_failure(video_id, task_id)
     send_user_processing_error_email(
         user_id=user_id,
-        error=RuntimeError(f"Pipeline task failed: {task_id}"),
+        error=exc,
         user_message=f"https://www.youtube.com/watch?v={video_id}",
         context="YouTube summary pipeline",
     )
@@ -104,7 +105,8 @@ def run_core_pipeline_task(video_id: str, user_id: int):
             check_duplicate_hit_count(video_id, user_id)
         )
 
-        if duplicate_result:
+        # FAILED 상태 영상은 재처리 허용 — duplicate 체크에서 제외
+        if duplicate_result and duplicate_result.get("status") != "FAILED":
             logger.info(
         f"중복 영상 감지: video_id={video_id}, "
         f"user_id={user_id}, hit_count={duplicate_result['hit_count']}"

@@ -3,6 +3,7 @@ from typing import Any
 
 from celery.utils.log import get_task_logger
 
+from app.models.knowledge import ProcessStatus
 from app.repositories.knowledge import (
     KnowledgeRepository,
     _update_chunk_embeddings,
@@ -256,17 +257,17 @@ async def check_duplicate_hit_count(video_id: str, user_id: int):
             return None
 
         # FAILED면 hit_count 증가 X
-        if existing_knowledge.status == "FAILED":
+        if existing_knowledge.status == ProcessStatus.FAILED:
             return {
                 "knowledge_id": str(existing_knowledge.id),
                 "hit_count": existing_knowledge.hit_count,
-                "status": existing_knowledge.status,
+                "status": existing_knowledge.status.value,
                 "duplicate": True,
                 "counted": False,
             }
 
         # COMPLETED 상태일 때만 hit_count 증가
-        if existing_knowledge.status == "COMPLETED":
+        if existing_knowledge.status == ProcessStatus.COMPLETED:
             updated_knowledge = await knowledge_repository.increase_hit_count(
                 existing_knowledge
             )
@@ -274,16 +275,16 @@ async def check_duplicate_hit_count(video_id: str, user_id: int):
             return {
                 "knowledge_id": str(updated_knowledge.id),
                 "hit_count": updated_knowledge.hit_count,
-                "status": updated_knowledge.status,
+                "status": updated_knowledge.status.value,
                 "duplicate": True,
                 "counted": True,
             }
 
-        # PROCESSING 등은 증가 X
+        # PENDING/PROCESSING 등은 증가 X
         return {
             "knowledge_id": str(existing_knowledge.id),
             "hit_count": existing_knowledge.hit_count,
-            "status": existing_knowledge.status,
+            "status": existing_knowledge.status.value,
             "duplicate": True,
             "counted": False,
         }
