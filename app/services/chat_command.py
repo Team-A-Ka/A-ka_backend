@@ -8,6 +8,9 @@ from app.core.config import settings
 from app.schemas.intent import IntentExtraction, IntentType
 from app.services.search_service import search_and_answer
 from app.tasks.knowledge_tasks import run_core_pipeline_task, save_link_only_task
+from app.services.smtp_service import send_search_result_email
+from app.models.notion import NotionConnection
+from database import SessionLocal
 
 logger = get_task_logger(__name__)
 
@@ -129,12 +132,38 @@ class ChatCommandService:
         logger.info("➔ SEARCH 의도 감지. RAG 검색 파이프라인 실행")
 
         search_result = search_and_answer(user_id, user_message)
+
+        session = SessionLocal()
+        try:
+            # notion_connection 테이블에서 해당 사용자의 정보를 가져오기
+            conn = session.query(NotionConnection).filter_by(user_id=user_id).first()
+            
+            # 이메일 정보 있는지 확인
+            if conn and conn.owner_user_email:
+                recipient_email = conn.owner_user_email
+                
+                # 3. 이메일 발송
+                send_search_result_email(
+                    recipient_email=recipient_email,
+                    query=user_message,
+                    answer=search_result["answer"],
+                    chunks=search_result.get("chunks", [])
+                )
+                logger.info(f"노션 연동 메일({recipient_email})로 검색 결과 전송 완료")
+            else:
+                logger.warning(f"사용자 {user_id}의 NotionConnection 정보나 이메일이 없습니다.")
+
+        except Exception as e:
+            logger.error(f"노션 이메일 조회 및 발송 중 오류: {e}")
+        finally:
+            session.close()
+
         return {
             "intent": "SEARCH",
             "user_id": user_id,
-            "result": search_result,
+            "result": search_result["answer"],
+            "sources": search_result.get("sources", 0)
         }
-
 
     @staticmethod
     def parse_youtube_video_id(url: str | None) -> str | None:

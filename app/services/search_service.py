@@ -238,4 +238,5 @@ def search_and_answer(user_id: int, query: str) -> dict:
     return {
         "answer": result["answer"],
         "sources": result["sources"],
+        "chunks": result.get("chunks", []),
     }
