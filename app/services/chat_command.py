@@ -36,6 +36,8 @@ class ChatCommandService:
     def analyze_intent(self, user_message: str) -> tuple[str, str | None]:
         intent = IntentType.UNKNOWN.value
         detected_url = None
+        last_error: Exception | None = None
+        parsed_successfully = False
 
         for attempt in range(3):
             try:
@@ -61,6 +63,7 @@ class ChatCommandService:
                 )
 
                 parsed_result = response.choices[0].message.parsed
+                parsed_successfully = True
                 if parsed_result:
                     intent = parsed_result.intent.value
                     detected_url = parsed_result.detected_url
@@ -69,11 +72,15 @@ class ChatCommandService:
                     )
                 break
             except Exception as exc:
+                last_error = exc
                 logger.error(
                     f"Failed to analyze intent ({attempt + 1}/3): {exc}"
                 )
                 if attempt < 2:
                     time.sleep(1)
+
+        if last_error is not None and not parsed_successfully:
+            raise RuntimeError("Failed to analyze user intent") from last_error
 
         return intent, detected_url
 
