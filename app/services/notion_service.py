@@ -206,6 +206,42 @@ class NotionService:
         }
         return self._request("POST", "/pages", json=body)
 
+    def create_child_page(
+        self,
+        title: str,
+        parent_page_id: str,
+        content: str | None = None,
+    ) -> dict[str, Any]:
+        parent_id = self._normalize_page_id(parent_page_id)
+        if not parent_id:
+            raise NotionServiceError(
+                "parent_page_id is required.",
+                status_code=400,
+            )
+
+        body: dict[str, Any] = {
+            "parent": {"type": "page_id", "page_id": parent_id},
+            "properties": {"title": {"title": self._rich_text(title)}},
+        }
+        if content is not None:
+            body["children"] = self._summary_blocks(content)
+
+        return self._request("POST", "/pages", json=body)
+
+    def create_workspace_page(
+        self,
+        title: str,
+        content: str | None = None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "parent": {"type": "workspace", "workspace": True},
+            "properties": {"title": {"title": self._rich_text(title)}},
+        }
+        if content is not None:
+            body["children"] = self._summary_blocks(content)
+
+        return self._request("POST", "/pages", json=body)
+
     def _summary_blocks(
         self,
         summary: str,

@@ -1,6 +1,7 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.auth_dependencies import get_current_user
@@ -21,11 +22,11 @@ from app.schemas.notion import (
 )
 from app.services.auth_service import get_user_by_id
 from app.services.notion_connection_service import (
+    connect_notion_account,
     delete_notion_connection,
     get_notion_connection,
     set_parent_page_id,
     update_notion_tokens,
-    upsert_notion_connection,
 )
 from app.services.notion_service import NotionService, NotionServiceError
 from database import get_db
@@ -54,7 +55,7 @@ def handle_notion_oauth_callback(
     state: str | None = None,
     error: str | None = None,
     error_description: str | None = None,
-) -> NotionOAuthCallbackResponse:
+) -> NotionOAuthCallbackResponse | RedirectResponse:
     if error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -78,15 +79,13 @@ def handle_notion_oauth_callback(
             detail="OAuth state user was not found.",
         )
 
-    connection = upsert_notion_connection(db, user_id, token_payload)
-    return NotionOAuthCallbackResponse(
-        **_connection_payload(connection),
-        message=(
-            "Notion connected. Select a parent page before saving pages."
-            if not connection.parent_page_id
-            else "Notion connected."
-        ),
-    )
+    try:
+        connection = connect_notion_account(db, user_id, token_payload)
+    except NotionServiceError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    return _oauth_callback_response(connection)
 
 
 @router.get("/me", response_model=NotionUserConnectionResponse)
@@ -286,3 +285,43 @@ def _connection_payload(connection: NotionConnection) -> dict[str, Any]:
         "parent_page_id": connection.parent_page_id,
         "duplicated_template_id": connection.duplicated_template_id,
     }
+
+
+def _oauth_callback_response(
+    connection: NotionConnection,
+) -> NotionOAuthCallbackResponse | RedirectResponse:
+    page_url = _parent_page_url(connection)
+    if page_url:
+        return RedirectResponse(
+            url=page_url,
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    return NotionOAuthCallbackResponse(
+        **_connection_payload(connection),
+        message=_oauth_callback_message(connection),
+    )
+
+
+def _parent_page_url(connection: NotionConnection) -> str | None:
+    if not connection.parent_page_id:
+        return None
+
+    try:
+        page = NotionService(api_key=connection.access_token).retrieve_page(
+            connection.parent_page_id
+        )
+    except NotionServiceError:
+        return None
+
+    page_url = page.get("url")
+    if not isinstance(page_url, str) or not page_url:
+        return None
+    return page_url
+
+
+def _oauth_callback_message(connection: NotionConnection) -> str:
+    if connection.parent_page_id:
+        return "Notion connected."
+
+    return "Notion connected. Select a parent page before saving pages."
