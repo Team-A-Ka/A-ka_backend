@@ -4,6 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.models.category import Category
 from app.models.knowledge import (
@@ -294,6 +295,23 @@ async def save_link_only(
 
     async with async_session_maker() as session:
         try:
+            # 1. '미분류' 카테고리 찾기
+            stmt = select(Category).where(Category.name == "미분류")
+            result = await session.execute(stmt)
+            category = result.scalars().first()
+
+            if not category:
+                try:
+                    # 2. 없으면 생성
+                    category = Category(name="미분류")
+                    session.add(category)
+                    await session.flush() 
+                except IntegrityError:
+                    # 3. 만약 다른 워커가 먼저 만들었으면 에러 내지 말고 다시 조회해서 가져오기
+                    await session.rollback() # 에러 난 시도는 취소
+                    result = await session.execute(stmt)
+                    category = result.scalars().first()
+
             knowledge = Knowledge(
                 id=knowledge_id,
                 user_id=user_id,
@@ -302,7 +320,7 @@ async def save_link_only(
                 original_url=f"https://www.youtube.com/watch?v={video_id}",
                 source_type=SourceType.YOUTUBE,
                 status=ProcessStatus.COMPLETED,
-                category_id=None,
+                category_id=category.id,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
             )
@@ -320,7 +338,7 @@ async def save_link_only(
             await session.commit()
 
             logger.info(
-                f"[SAVE_ONLY] Saved Knowledge+YoutubeMetadata: "
+                f"[SAVE_ONLY] Saved Knowledge+YoutubeMetadata with '미분류' category: "
                 f"knowledge_id={knowledge_id}, video_id={video_id}"
             )
             return knowledge_id

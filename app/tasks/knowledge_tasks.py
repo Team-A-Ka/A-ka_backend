@@ -1,10 +1,15 @@
-from celery import chain
-from app.core.celery_app import celery_app
-from celery import shared_task
+from celery import chain, shared_task
 from celery.utils.log import get_task_logger
+
+from app.core.celery_app import celery_app
 from app.repositories.knowledge import create_base, mark_failed
-from app.services.knowledge_pipeline import KnowledgePipelineService, check_duplicate_hit_count, run_async
+from app.services.knowledge_pipeline import (
+    KnowledgePipelineService,
+    check_duplicate_hit_count,
+    run_async,
+)
 from app.services.save_only_service import SaveOnlyService
+from app.services.user_notification_service import send_user_processing_error_email
 
 logger = get_task_logger(__name__)
 
@@ -41,8 +46,15 @@ def update_pipeline_status_task(self, data: dict):
 # 에러 핸들러
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
-def handle_pipeline_failure_task(self, video_id: str, task_id: str = None):
-    return knowledge_pipeline_service.handle_failure(video_id, task_id or self.request.id)
+def handle_pipeline_failure_task(self, task_id, video_id: str, user_id: int):
+    result = knowledge_pipeline_service.handle_failure(video_id, task_id or self.request.id)
+    send_user_processing_error_email(
+        user_id=user_id,
+        error=RuntimeError(f"Pipeline task failed: {task_id}"),
+        user_message=f"https://www.youtube.com/watch?v={video_id}",
+        context="YouTube summary pipeline",
+    )
+    return result
 
 
 # ==========================================
@@ -69,6 +81,12 @@ def save_link_only_task(self, video_id: str, user_id: int):
                 run_async(mark_failed(video_id, reason=f"SAVE_ONLY 최종 실패: {exc}"))
             except Exception as e:
                 logger.error(f"[SAVE_ONLY] mark_failed 호출 실패: {e}")
+            send_user_processing_error_email(
+                user_id=user_id,
+                error=exc,
+                user_message=f"https://www.youtube.com/watch?v={video_id}",
+                context="YouTube link save",
+            )
             raise
 
 
@@ -105,13 +123,19 @@ def run_core_pipeline_task(video_id: str, user_id: int):
 
     except Exception as e:
         logger.error(f"파이프라인 시작 실패 (DB 초기화 에러): {e}")
+        send_user_processing_error_email(
+            user_id=user_id,
+            error=e,
+            user_message=f"https://www.youtube.com/watch?v={video_id}",
+            context="YouTube pipeline startup",
+        )
         return "Failed to start pipeline: DB Error"
 
     workflow = chain(
         collect_and_chunk_task.s(video_id, user_id),
         run_intelligence_graph_task.s(),
         update_pipeline_status_task.s(),
-    ).on_error(handle_pipeline_failure_task.s(video_id))
+    ).on_error(handle_pipeline_failure_task.s(video_id, user_id))
 
     result = workflow.delay()
 

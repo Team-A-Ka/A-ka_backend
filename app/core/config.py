@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "aka_db"
 
     DATABASE_URL: str | None = None
-    SYNC_DATABASE_URL: str | None = None
 
     # Redis / Celery
     # 백그라운드 큐 통신을 위한 로컬 Redis 브로커 주소입니다.
@@ -61,22 +60,18 @@ class Settings(BaseSettings):
         )
 
     @property
-    def sync_database_url(self) -> str:
-        if self.SYNC_DATABASE_URL:
-            return self.SYNC_DATABASE_URL
-
-        return (
-            f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
-            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        )
-
-    @property
     def celery_broker_url(self) -> str:
         return self.CELERY_BROKER_URL or self.REDIS_URL
 
     @property
     def celery_result_backend(self) -> str:
         return self.CELERY_RESULT_BACKEND or self.REDIS_URL
+
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    ERROR_ALERT_EMAIL: str = ""
 
     class Config:
         env_file = ".env"

@@ -1,0 +1,25 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy with SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ${{ secrets.EC2_APP_DIR }}
+            git pull origin main
+            docker compose -f docker-compose.prod.yml up -d --build
+            docker compose -f docker-compose.prod.yml exec -T db psql -U zo_o -d aka_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
+            docker compose -f docker-compose.prod.yml exec -T web uv run python -c "from database import Base, engine; import app.models; Base.metadata.create_all(bind=engine); print('tables created')"
+            docker compose -f docker-compose.prod.yml restart web worker

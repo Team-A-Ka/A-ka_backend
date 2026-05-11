@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO)
 def run_test():
     print("================== Test 1: Upload (유튜브 링크) ==================")
     res1 = process_ai_routing_task(
-        "tester_1",
+        1,
         "이거 요약해서 올려줄래? https://www.youtube.com/watch?v=HbYF0EkAvAo",
     )
     print(f"Result 1: {res1}\n")
