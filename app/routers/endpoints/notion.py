@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 def start_notion_oauth(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> NotionOAuthStartResponse:
+    """
+    여기서 authorization_url 생성
+    """
     try:
         state = notion_service.create_oauth_state(current_user.id)
         authorization_url = notion_service.build_oauth_authorization_url(state)
@@ -59,6 +62,9 @@ def handle_notion_oauth_callback(
     error: str | None = None,
     error_description: str | None = None,
 ) -> NotionOAuthCallbackResponse | RedirectResponse:
+    """
+    notion token API 호출
+    """
     if error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -242,9 +248,7 @@ def _extract_title(item: dict[str, Any]) -> str:
     title = item.get("title") or []
     if title:
         return "".join(
-            part.get("plain_text", "")
-            for part in title
-            if isinstance(part, dict)
+            part.get("plain_text", "") for part in title if isinstance(part, dict)
         )
     return "Untitled"
 
@@ -272,7 +276,9 @@ def _create_page_for_connection(
         source_url=request.source_url,
     )
     if page is None:
-        raise NotionServiceError("Notion summary database is not ready.", status_code=400)
+        raise NotionServiceError(
+            "Notion summary database is not ready.", status_code=400
+        )
     return page
 
 
