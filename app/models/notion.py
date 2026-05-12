@@ -31,6 +31,8 @@ class NotionConnection(Base):
     access_token: Mapped[str] = mapped_column(Text, nullable=False)
     refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_page_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    summary_database_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    summary_data_source_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     duplicated_template_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     owner_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     owner_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

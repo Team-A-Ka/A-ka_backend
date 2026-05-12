@@ -15,6 +15,7 @@ from app.repositories.knowledge import create_base, mark_failed
 from app.services.knowledge_pipeline import (
     KnowledgePipelineService,
     check_duplicate_hit_count,
+    save_summary_to_user_notion,
 )
 from app.services.save_only_service import SaveOnlyService
 from app.services.user_notification_service import send_user_processing_error_email
@@ -114,16 +115,34 @@ def run_core_pipeline_task(video_id: str, user_id: int):
 
         if duplicate_result:
             logger.info(
-        f"중복 영상 감지: video_id={video_id}, "
-        f"user_id={user_id}, hit_count={duplicate_result['hit_count']}"
+                f"중복 영상 감지: video_id={video_id}, "
+                f"user_id={user_id}, hit_count={duplicate_result['hit_count']}"
             )
 
-            return {
+            response = {
                 "video_id": video_id,
                 "user_id": user_id,
+                "status": "duplicate",
                 "duplicate": True,
                 "hit_count": duplicate_result["hit_count"],
             }
+
+            if duplicate_result.get("status") == "COMPLETED":
+                notion_page = save_summary_to_user_notion(
+                    user_id=user_id,
+                    video_id=video_id,
+                    title=duplicate_result.get("title") or f"YouTube summary {video_id}",
+                    full_summary=duplicate_result.get("summary") or "Summary is empty.",
+                    category=duplicate_result.get("category"),
+                )
+                response["status"] = (
+                    "duplicate_saved_to_notion"
+                    if notion_page
+                    else "duplicate_no_notion"
+                )
+                response["notion_page"] = notion_page
+
+            return response
     
         # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
         knowledge_db_id = asyncio.run(create_base(video_id, user_id))
@@ -145,9 +164,11 @@ def run_core_pipeline_task(video_id: str, user_id: int):
         update_pipeline_status_task.s(),  # Step 3: 완료
     ).on_error(handle_pipeline_failure_task.s(video_id, user_id))
 
-    workflow.delay()
+    async_result = workflow.delay()
 
     return {
         "video_id": video_id,
+        "status": "queued",
+        "task_id": async_result.id,
         # "status": "QUEUED", 흠!!!!!!!
     }

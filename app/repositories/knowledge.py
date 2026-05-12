@@ -3,8 +3,9 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.category import Category
 from app.models.knowledge import (
@@ -83,6 +84,8 @@ class KnowledgeRepository:
                 Knowledge.user_id == user_id,
                 YoutubeMetadata.video_id == video_id,
             )
+            .options(selectinload(Knowledge.category))
+            .order_by(Knowledge.created_at.desc())
             .limit(1)
         )
 

@@ -17,6 +17,7 @@ from app.services.notion_connection_service import (
     create_summary_page_for_user,
     resolve_internal_user_id,
 )
+from app.services.notion_service import NotionServiceError
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
@@ -176,6 +177,7 @@ class KnowledgePipelineService:
                 video_id=video_id,
                 title=title,
                 full_summary=full_summary,
+                category=resolved_category,
             )
 
         logger.info(f"[Step 3] Completed video_id={video_id}, title={title}")
@@ -201,6 +203,7 @@ def save_summary_to_user_notion(
     video_id: str,
     title: str,
     full_summary: str,
+    category: str | None = None,
 ) -> dict[str, Any] | None:
     db = SessionLocal()
     try:
@@ -215,15 +218,24 @@ def save_summary_to_user_notion(
             title=title or f"YouTube summary {video_id}",
             summary=full_summary or "Summary is empty.",
             source_url=f"https://www.youtube.com/watch?v={video_id}",
+            category=category,
         )
         if page is None:
             logger.info(
                 f"[Notion] user_id={internal_user_id} has no ready Notion connection."
             )
             return None
-        
+
         logger.info(f"[Notion] Summary page saved: {page.get('url')}")
         return {"id": page.get("id"), "url": page.get("url")}
+    except NotionServiceError as exc:
+        logger.warning(
+            "[Notion] Notion API error (user_id=%s status=%s): %s",
+            user_id,
+            exc.status_code,
+            exc,
+        )
+        return None
     except Exception as exc:
         logger.warning(f"[Notion] Failed to save summary page: {exc}")
         return None
@@ -254,35 +266,41 @@ async def check_duplicate_hit_count(video_id: str, user_id: int):
         if not existing_knowledge:
             return None
 
+        duplicate_result = _build_duplicate_result(
+            existing_knowledge,
+            counted=False,
+        )
+
         # FAILED면 hit_count 증가 X
-        if existing_knowledge.status == "FAILED":
-            return {
-                "knowledge_id": str(existing_knowledge.id),
-                "hit_count": existing_knowledge.hit_count,
-                "status": existing_knowledge.status,
-                "duplicate": True,
-                "counted": False,
-            }
+        existing_status = duplicate_result["status"]
+
+        if existing_status == "FAILED":
+            return duplicate_result
 
         # COMPLETED 상태일 때만 hit_count 증가
-        if existing_knowledge.status == "COMPLETED":
+        if existing_status == "COMPLETED":
             updated_knowledge = await knowledge_repository.increase_hit_count(
                 existing_knowledge
             )
 
-            return {
-                "knowledge_id": str(updated_knowledge.id),
-                "hit_count": updated_knowledge.hit_count,
-                "status": updated_knowledge.status,
-                "duplicate": True,
-                "counted": True,
-            }
+            duplicate_result["hit_count"] = updated_knowledge.hit_count
+            duplicate_result["counted"] = True
+            return duplicate_result
 
         # PROCESSING 등은 증가 X
-        return {
-            "knowledge_id": str(existing_knowledge.id),
-            "hit_count": existing_knowledge.hit_count,
-            "status": existing_knowledge.status,
-            "duplicate": True,
-            "counted": False,
-        }
+        return duplicate_result
+
+
+def _build_duplicate_result(knowledge, counted: bool) -> dict[str, Any]:
+    status = getattr(knowledge.status, "value", knowledge.status)
+    category = getattr(knowledge, "category", None)
+    return {
+        "knowledge_id": str(knowledge.id),
+        "hit_count": knowledge.hit_count,
+        "status": status,
+        "duplicate": True,
+        "counted": counted,
+        "title": knowledge.title,
+        "summary": knowledge.summary,
+        "category": category.name if category is not None else None,
+    }

@@ -62,6 +62,8 @@ class NotionUserConnectionResponse(BaseModel):
     workspace_icon: str | None = None
     bot_id: str | None = None
     parent_page_id: str | None = None
+    summary_database_id: str | None = None
+    summary_data_source_id: str | None = None
     duplicated_template_id: str | None = None
 
 

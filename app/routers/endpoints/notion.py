@@ -1,3 +1,4 @@
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -23,16 +24,18 @@ from app.schemas.notion import (
 from app.services.auth_service import get_user_by_id
 from app.services.notion_connection_service import (
     connect_notion_account,
+    create_summary_page_for_user,
     delete_notion_connection,
+    ensure_summary_database,
     get_notion_connection,
     set_parent_page_id,
-    update_notion_tokens,
 )
 from app.services.notion_service import NotionService, NotionServiceError
 from database import get_db
 
 router = APIRouter()
 notion_service = NotionService()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/oauth/start", response_model=NotionOAuthStartResponse)
@@ -96,6 +99,14 @@ def get_my_notion_connection(
     connection = get_notion_connection(db, current_user.id)
     if connection is None:
         return NotionUserConnectionResponse(connected=False)
+    try:
+        connection = ensure_summary_database(db, connection, raise_errors=False)
+    except Exception as exc:
+        logger.warning(
+            "Notion connection self-repair on GET /me failed (user_id=%s): %s",
+            current_user.id,
+            exc,
+        )
     return NotionUserConnectionResponse(**_connection_payload(connection))
 
 
@@ -253,25 +264,16 @@ def _create_page_for_connection(
     connection: NotionConnection,
     request: NotionPageCreateRequest,
 ) -> dict[str, Any]:
-    try:
-        return NotionService(api_key=connection.access_token).create_summary_page(
-            title=request.title,
-            summary=request.summary,
-            parent_page_id=connection.parent_page_id,
-            source_url=request.source_url,
-        )
-    except NotionServiceError as exc:
-        if exc.status_code != status.HTTP_401_UNAUTHORIZED or not connection.refresh_token:
-            raise
-
-    refreshed = notion_service.refresh_oauth_token(connection.refresh_token)
-    connection = update_notion_tokens(db, connection, refreshed)
-    return NotionService(api_key=connection.access_token).create_summary_page(
+    page = create_summary_page_for_user(
+        db=db,
+        user_id=connection.user_id,
         title=request.title,
         summary=request.summary,
-        parent_page_id=connection.parent_page_id,
         source_url=request.source_url,
     )
+    if page is None:
+        raise NotionServiceError("Notion summary database is not ready.", status_code=400)
+    return page
 
 
 def _connection_payload(connection: NotionConnection) -> dict[str, Any]:
@@ -283,6 +285,8 @@ def _connection_payload(connection: NotionConnection) -> dict[str, Any]:
         "workspace_icon": connection.workspace_icon,
         "bot_id": connection.bot_id,
         "parent_page_id": connection.parent_page_id,
+        "summary_database_id": connection.summary_database_id,
+        "summary_data_source_id": connection.summary_data_source_id,
         "duplicated_template_id": connection.duplicated_template_id,
     }
 

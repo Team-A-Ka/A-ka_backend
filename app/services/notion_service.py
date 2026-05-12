@@ -242,6 +242,108 @@ class NotionService:
 
         return self._request("POST", "/pages", json=body)
 
+    def create_summary_database(
+        self,
+        parent_page_id: str,
+        title: str = "A-ka 요약 저장소",
+    ) -> dict[str, Any]:
+        parent_id = self._normalize_page_id(parent_page_id)
+        if not parent_id:
+            raise NotionServiceError(
+                "parent_page_id is required.",
+                status_code=400,
+            )
+
+        body: dict[str, Any] = {
+            "parent": {"type": "page_id", "page_id": parent_id},
+            "title": self._rich_text(title),
+            "is_inline": True,
+            "initial_data_source": {
+                "properties": self._summary_database_properties(),
+            },
+        }
+        return self._request("POST", "/databases", json=body)
+
+    def retrieve_database(
+        self,
+        database_id: str,
+    ) -> dict[str, Any]:
+        normalized_database_id = self._normalize_page_id(database_id)
+        if not normalized_database_id:
+            raise NotionServiceError("database_id is required.", status_code=400)
+        return self._request("GET", f"/databases/{normalized_database_id}")
+
+    def create_summary_database_item(
+        self,
+        data_source_id: str,
+        title: str,
+        summary: str,
+        category: str | None = None,
+        source_url: str | None = None,
+        saved_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        normalized_data_source_id = self._normalize_page_id(data_source_id)
+        if not normalized_data_source_id:
+            raise NotionServiceError(
+                "data_source_id is required.",
+                status_code=400,
+            )
+
+        properties: dict[str, Any] = {
+            "제목": {"title": self._rich_text(title)},
+            "요약": {"rich_text": self._rich_text(summary)},
+            "저장일": {
+                "date": {
+                    "start": (saved_at or datetime.now(timezone.utc)).isoformat()
+                }
+            },
+        }
+        if category:
+            properties["카테고리"] = {"select": {"name": category[:100]}}
+        if source_url:
+            properties["원본 URL"] = {"url": source_url}
+        body: dict[str, Any] = {
+            "parent": {
+                "type": "data_source_id",
+                "data_source_id": normalized_data_source_id,
+            },
+            "properties": properties,
+            "children": self._summary_blocks(summary, source_url),
+        }
+        return self._request("POST", "/pages", json=body)
+
+    @staticmethod
+    def extract_data_source_id(database_payload: dict[str, Any]) -> str:
+        candidates = [
+            database_payload.get("data_sources"),
+            database_payload.get("data_source"),
+            database_payload.get("initial_data_source"),
+        ]
+
+        for candidate in candidates:
+            if isinstance(candidate, list) and candidate:
+                data_source_id = candidate[0].get("id")
+            elif isinstance(candidate, dict):
+                data_source_id = candidate.get("id")
+            else:
+                data_source_id = None
+
+            normalized = NotionService._normalize_page_id(data_source_id)
+            if normalized:
+                return normalized
+
+        return ""
+
+    @staticmethod
+    def _summary_database_properties() -> dict[str, Any]:
+        return {
+            "제목": {"title": {}},
+            "카테고리": {"select": {}},
+            "원본 URL": {"url": {}},
+            "요약": {"rich_text": {}},
+            "저장일": {"date": {}},
+        }
+
     def _summary_blocks(
         self,
         summary: str,

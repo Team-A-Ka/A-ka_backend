@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 AUTO_PARENT_PAGE_TITLE = "A-ka"
 AUTO_PARENT_PAGE_CONTENT = "A-ka가 요약 결과를 저장하는 페이지입니다."
+SUMMARY_DATABASE_TITLE = "A-ka 요약 저장소"
 
 
 def get_notion_connection(db: Session, user_id: int) -> NotionConnection | None:
@@ -91,10 +92,11 @@ def upsert_notion_connection(
         for key, value in values.items():
             setattr(connection, key, value)
         if normalized_parent_page_id:
-            connection.parent_page_id = normalized_parent_page_id
+            _assign_parent_page_id(connection, normalized_parent_page_id)
         if duplicated_template_id:
-            connection.parent_page_id = NotionService._normalize_page_id(
-                duplicated_template_id
+            _assign_parent_page_id(
+                connection,
+                NotionService._normalize_page_id(duplicated_template_id),
             )
 
     try:
@@ -131,16 +133,18 @@ def connect_notion_account(
         existing_connection,
         token_payload,
     )
-    if not parent_page_id:
-        parent_page_id = create_auto_parent_page(token_payload["access_token"])
-
     connection = upsert_notion_connection(
         db,
         user_id,
         token_payload,
         parent_page_id=parent_page_id,
     )
-    return ensure_auto_parent_page(db, connection)
+
+    if not connection.parent_page_id:
+        connection = ensure_auto_parent_page(db, connection)
+    if connection.parent_page_id:
+        connection = ensure_summary_database(db, connection)
+    return connection
 
 
 def create_auto_parent_page(
@@ -179,7 +183,27 @@ def ensure_auto_parent_page(
     connection: NotionConnection,
 ) -> NotionConnection:
     if connection.parent_page_id:
-        return connection
+        service = NotionService(api_key=connection.access_token)
+        try:
+            service.retrieve_page(connection.parent_page_id)
+            return connection
+        except NotionServiceError as exc:
+            if exc.status_code != 404:
+                logger.warning(
+                    "Notion parent page verification failed. user_id=%s status=%s: %s",
+                    connection.user_id,
+                    exc.status_code,
+                    exc,
+                )
+                return connection
+            logger.warning(
+                "Stored Notion parent page no longer exists (404). user_id=%s — "
+                "clearing and recreating auto parent.",
+                connection.user_id,
+            )
+            _assign_parent_page_id(connection, None)
+            db.commit()
+            db.refresh(connection)
 
     try:
         page_id = create_auto_parent_page(connection.access_token)
@@ -195,6 +219,126 @@ def ensure_auto_parent_page(
         return connection
 
     return set_parent_page_id(db, connection, page_id)
+
+
+def ensure_summary_database(
+    db: Session,
+    connection: NotionConnection,
+    *,
+    raise_errors: bool = False,
+) -> NotionConnection:
+    connection = ensure_auto_parent_page(db, connection)
+    if not connection.parent_page_id:
+        return connection
+
+    service = NotionService(api_key=connection.access_token)
+
+    if connection.summary_database_id and connection.summary_data_source_id:
+        try:
+            database_payload = service.retrieve_database(
+                connection.summary_database_id
+            )
+        except NotionServiceError as exc:
+            if exc.status_code == 404:
+                logger.warning(
+                    "Stored Notion summary database no longer exists (404). "
+                    "Clearing ids. user_id=%s",
+                    connection.user_id,
+                )
+                connection = _clear_summary_database_ids(db, connection)
+            else:
+                # 검증 API(403/5xx/일시 오류 등)가 막혀도 저장 시도는 이어가야 함.
+                # 여기서 raise 하면 상위에서 일반 Exception 으로 삼켜져 등록 실패만 보이는 경우가 많음.
+                logger.warning(
+                    "Could not verify Notion summary database; using stored ids. "
+                    "user_id=%s status=%s: %s",
+                    connection.user_id,
+                    exc.status_code,
+                    exc,
+                )
+                return connection
+        else:
+            fresh_ds = NotionService.extract_data_source_id(database_payload)
+            if fresh_ds and fresh_ds != connection.summary_data_source_id:
+                connection.summary_data_source_id = fresh_ds
+                db.commit()
+                db.refresh(connection)
+            return connection
+
+    if connection.summary_data_source_id:
+        return connection
+
+    try:
+        database = service.create_summary_database(
+            parent_page_id=connection.parent_page_id,
+            title=SUMMARY_DATABASE_TITLE,
+        )
+    except NotionServiceError as exc:
+        if exc.status_code == 404 and connection.parent_page_id:
+            logger.warning(
+                "Stored Notion parent page is unavailable. Recreating parent page. "
+                "user_id=%s parent_page_id=%s",
+                connection.user_id,
+                connection.parent_page_id,
+            )
+            _assign_parent_page_id(connection, None)
+            db.commit()
+            db.refresh(connection)
+            connection = ensure_auto_parent_page(db, connection)
+            if not connection.parent_page_id:
+                if raise_errors:
+                    raise
+                return connection
+
+            try:
+                database = service.create_summary_database(
+                    parent_page_id=connection.parent_page_id,
+                    title=SUMMARY_DATABASE_TITLE,
+                )
+            except NotionServiceError as retry_exc:
+                logger.warning(
+                    "Failed to recreate Notion summary database. user_id=%s error=%s",
+                    connection.user_id,
+                    retry_exc,
+                )
+                if raise_errors:
+                    raise
+                return connection
+        else:
+            logger.warning(
+                "Failed to create Notion summary database. user_id=%s error=%s",
+                connection.user_id,
+                exc,
+            )
+            if raise_errors:
+                raise
+            return connection
+    database_id = NotionService._normalize_page_id(database.get("id")) or None
+    data_source_id = NotionService.extract_data_source_id(database)
+    if not data_source_id and database_id:
+        try:
+            database = service.retrieve_database(database_id)
+            data_source_id = NotionService.extract_data_source_id(database)
+        except NotionServiceError:
+            data_source_id = ""
+
+    if not database_id or not data_source_id:
+        message = "Notion summary database was created without a data source id."
+        logger.warning(
+            "%s user_id=%s database_id=%s",
+            message,
+            connection.user_id,
+            database_id,
+        )
+        if raise_errors:
+            raise NotionServiceError(message)
+        return connection
+
+    connection.summary_database_id = database_id
+    connection.summary_data_source_id = data_source_id
+    db.commit()
+    db.refresh(connection)
+    return connection
 
 
 def find_duplicate_notion_owner_connection(
@@ -291,7 +435,7 @@ def set_parent_page_id(
     connection: NotionConnection,
     parent_page_id: str,
 ) -> NotionConnection:
-    connection.parent_page_id = NotionService._normalize_page_id(parent_page_id)
+    _assign_parent_page_id(connection, NotionService._normalize_page_id(parent_page_id))
     db.commit()
     db.refresh(connection)
     return connection
@@ -308,28 +452,114 @@ def create_summary_page_for_user(
     title: str,
     summary: str,
     source_url: str | None = None,
+    category: str | None = None,
 ) -> dict[str, Any] | None:
     connection = get_notion_connection(db, user_id)
-    if connection is None or not connection.parent_page_id:
+    if connection is None:
         return None
 
-    service = NotionService(api_key=connection.access_token)
     try:
-        return service.create_summary_page(
+        return _create_summary_database_item_for_connection(
+            db=db,
+            connection=connection,
             title=title,
             summary=summary,
-            parent_page_id=connection.parent_page_id,
             source_url=source_url,
+            category=category,
         )
     except NotionServiceError as exc:
+        if exc.status_code == 404:
+            logger.warning(
+                "Stored Notion summary database is unavailable. Recreating it. "
+                "user_id=%s data_source_id=%s",
+                connection.user_id,
+                connection.summary_data_source_id,
+            )
+            connection = _clear_summary_database_ids(db, connection)
+            return _create_summary_database_item_for_connection(
+                db=db,
+                connection=connection,
+                title=title,
+                summary=summary,
+                source_url=source_url,
+                category=category,
+            )
+
         if exc.status_code != 401 or not connection.refresh_token:
             raise
 
     refreshed = NotionService().refresh_oauth_token(connection.refresh_token)
     connection = update_notion_tokens(db, connection, refreshed)
-    return NotionService(api_key=connection.access_token).create_summary_page(
+    try:
+        return _create_summary_database_item_for_connection(
+            db=db,
+            connection=connection,
+            title=title,
+            summary=summary,
+            source_url=source_url,
+            category=category,
+        )
+    except NotionServiceError as exc:
+        if exc.status_code != 404:
+            raise
+
+        logger.warning(
+            "Stored Notion summary database is unavailable after token refresh. "
+            "Recreating it. user_id=%s data_source_id=%s",
+            connection.user_id,
+            connection.summary_data_source_id,
+        )
+        connection = _clear_summary_database_ids(db, connection)
+        return _create_summary_database_item_for_connection(
+            db=db,
+            connection=connection,
+            title=title,
+            summary=summary,
+            source_url=source_url,
+            category=category,
+        )
+
+
+def _create_summary_database_item_for_connection(
+    db: Session,
+    connection: NotionConnection,
+    title: str,
+    summary: str,
+    source_url: str | None,
+    category: str | None,
+) -> dict[str, Any] | None:
+    connection = ensure_summary_database(db, connection, raise_errors=True)
+    if not connection.summary_data_source_id:
+        return None
+
+    return NotionService(api_key=connection.access_token).create_summary_database_item(
+        data_source_id=connection.summary_data_source_id,
         title=title,
         summary=summary,
-        parent_page_id=connection.parent_page_id,
+        category=category,
         source_url=source_url,
     )
+
+
+def _clear_summary_database_ids(
+    db: Session,
+    connection: NotionConnection,
+) -> NotionConnection:
+    connection.summary_database_id = None
+    connection.summary_data_source_id = None
+    db.commit()
+    db.refresh(connection)
+    return connection
+
+
+def _assign_parent_page_id(
+    connection: NotionConnection,
+    parent_page_id: str | None,
+) -> None:
+    normalized_parent_page_id = NotionService._normalize_page_id(parent_page_id)
+    if connection.parent_page_id == normalized_parent_page_id:
+        return
+
+    connection.parent_page_id = normalized_parent_page_id or None
+    connection.summary_database_id = None
+    connection.summary_data_source_id = None
