@@ -36,6 +36,12 @@ class YouTubeService:
 
         return None
 
+    def is_shorts_url(self, url: str) -> bool:
+        """URL을 확인하여 쇼츠 여부를 반환합니다."""
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        return "/shorts/" in parsed.path
+    
     ###### youtube metadata 추출 ######
     def get_metadata(self, video_id: str) -> dict:
         params = {
