@@ -1,6 +1,8 @@
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.auth_dependencies import get_current_user
@@ -21,23 +23,28 @@ from app.schemas.notion import (
 )
 from app.services.auth_service import get_user_by_id
 from app.services.notion_connection_service import (
+    connect_notion_account,
+    create_summary_page_for_user,
     delete_notion_connection,
+    ensure_summary_database,
     get_notion_connection,
     set_parent_page_id,
-    update_notion_tokens,
-    upsert_notion_connection,
 )
 from app.services.notion_service import NotionService, NotionServiceError
 from database import get_db
 
 router = APIRouter()
 notion_service = NotionService()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/oauth/start", response_model=NotionOAuthStartResponse)
 def start_notion_oauth(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> NotionOAuthStartResponse:
+    """
+    여기서 authorization_url 생성
+    """
     try:
         state = notion_service.create_oauth_state(current_user.id)
         authorization_url = notion_service.build_oauth_authorization_url(state)
@@ -54,7 +61,10 @@ def handle_notion_oauth_callback(
     state: str | None = None,
     error: str | None = None,
     error_description: str | None = None,
-) -> NotionOAuthCallbackResponse:
+) -> NotionOAuthCallbackResponse | RedirectResponse:
+    """
+    notion token API 호출
+    """
     if error:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -78,15 +88,13 @@ def handle_notion_oauth_callback(
             detail="OAuth state user was not found.",
         )
 
-    connection = upsert_notion_connection(db, user_id, token_payload)
-    return NotionOAuthCallbackResponse(
-        **_connection_payload(connection),
-        message=(
-            "Notion connected. Select a parent page before saving pages."
-            if not connection.parent_page_id
-            else "Notion connected."
-        ),
-    )
+    try:
+        connection = connect_notion_account(db, user_id, token_payload)
+    except NotionServiceError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    return _oauth_callback_response(connection)
 
 
 @router.get("/me", response_model=NotionUserConnectionResponse)
@@ -97,6 +105,14 @@ def get_my_notion_connection(
     connection = get_notion_connection(db, current_user.id)
     if connection is None:
         return NotionUserConnectionResponse(connected=False)
+    try:
+        connection = ensure_summary_database(db, connection, raise_errors=False)
+    except Exception as exc:
+        logger.warning(
+            "Notion connection self-repair on GET /me failed (user_id=%s): %s",
+            current_user.id,
+            exc,
+        )
     return NotionUserConnectionResponse(**_connection_payload(connection))
 
 
@@ -232,9 +248,7 @@ def _extract_title(item: dict[str, Any]) -> str:
     title = item.get("title") or []
     if title:
         return "".join(
-            part.get("plain_text", "")
-            for part in title
-            if isinstance(part, dict)
+            part.get("plain_text", "") for part in title if isinstance(part, dict)
         )
     return "Untitled"
 
@@ -254,25 +268,18 @@ def _create_page_for_connection(
     connection: NotionConnection,
     request: NotionPageCreateRequest,
 ) -> dict[str, Any]:
-    try:
-        return NotionService(api_key=connection.access_token).create_summary_page(
-            title=request.title,
-            summary=request.summary,
-            parent_page_id=connection.parent_page_id,
-            source_url=request.source_url,
-        )
-    except NotionServiceError as exc:
-        if exc.status_code != status.HTTP_401_UNAUTHORIZED or not connection.refresh_token:
-            raise
-
-    refreshed = notion_service.refresh_oauth_token(connection.refresh_token)
-    connection = update_notion_tokens(db, connection, refreshed)
-    return NotionService(api_key=connection.access_token).create_summary_page(
+    page = create_summary_page_for_user(
+        db=db,
+        user_id=connection.user_id,
         title=request.title,
         summary=request.summary,
-        parent_page_id=connection.parent_page_id,
         source_url=request.source_url,
     )
+    if page is None:
+        raise NotionServiceError(
+            "Notion summary database is not ready.", status_code=400
+        )
+    return page
 
 
 def _connection_payload(connection: NotionConnection) -> dict[str, Any]:
@@ -284,5 +291,47 @@ def _connection_payload(connection: NotionConnection) -> dict[str, Any]:
         "workspace_icon": connection.workspace_icon,
         "bot_id": connection.bot_id,
         "parent_page_id": connection.parent_page_id,
+        "summary_database_id": connection.summary_database_id,
+        "summary_data_source_id": connection.summary_data_source_id,
         "duplicated_template_id": connection.duplicated_template_id,
     }
+
+
+def _oauth_callback_response(
+    connection: NotionConnection,
+) -> NotionOAuthCallbackResponse | RedirectResponse:
+    page_url = _parent_page_url(connection)
+    if page_url:
+        return RedirectResponse(
+            url=page_url,
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    return NotionOAuthCallbackResponse(
+        **_connection_payload(connection),
+        message=_oauth_callback_message(connection),
+    )
+
+
+def _parent_page_url(connection: NotionConnection) -> str | None:
+    if not connection.parent_page_id:
+        return None
+
+    try:
+        page = NotionService(api_key=connection.access_token).retrieve_page(
+            connection.parent_page_id
+        )
+    except NotionServiceError:
+        return None
+
+    page_url = page.get("url")
+    if not isinstance(page_url, str) or not page_url:
+        return None
+    return page_url
+
+
+def _oauth_callback_message(connection: NotionConnection) -> str:
+    if connection.parent_page_id:
+        return "Notion connected."
+
+    return "Notion connected. Select a parent page before saving pages."

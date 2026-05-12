@@ -6,6 +6,7 @@ from app.repositories.knowledge import create_base, mark_failed
 from app.services.knowledge_pipeline import (
     KnowledgePipelineService,
     check_duplicate_hit_count,
+    save_summary_to_user_notion,
     run_async,
 )
 from app.services.save_only_service import SaveOnlyService
@@ -47,7 +48,9 @@ def update_pipeline_status_task(self, data: dict):
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
 def handle_pipeline_failure_task(self, task_id, video_id: str, user_id: int):
-    result = knowledge_pipeline_service.handle_failure(video_id, task_id or self.request.id)
+    result = knowledge_pipeline_service.handle_failure(
+        video_id, task_id or self.request.id
+    )
     send_user_processing_error_email(
         user_id=user_id,
         error=RuntimeError(f"Pipeline task failed: {task_id}"),
@@ -100,23 +103,40 @@ def run_core_pipeline_task(video_id: str, user_id: int):
     """
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
     try:
-        duplicate_result = run_async(
-            check_duplicate_hit_count(video_id, user_id)
-        )
+        duplicate_result = run_async(check_duplicate_hit_count(video_id, user_id))
 
         if duplicate_result:
             logger.info(
-        f"중복 영상 감지: video_id={video_id}, "
-        f"user_id={user_id}, hit_count={duplicate_result['hit_count']}"
+                f"중복 영상 감지: video_id={video_id}, "
+                f"user_id={user_id}, hit_count={duplicate_result['hit_count']}"
             )
 
-            return {
+            response = {
                 "video_id": video_id,
                 "user_id": user_id,
+                "status": "duplicate",
                 "duplicate": True,
                 "hit_count": duplicate_result["hit_count"],
             }
-    
+
+            if duplicate_result.get("status") == "COMPLETED":
+                notion_page = save_summary_to_user_notion(
+                    user_id=user_id,
+                    video_id=video_id,
+                    title=duplicate_result.get("title")
+                    or f"YouTube summary {video_id}",
+                    full_summary=duplicate_result.get("summary") or "Summary is empty.",
+                    category=duplicate_result.get("category"),
+                )
+                response["status"] = (
+                    "duplicate_saved_to_notion"
+                    if notion_page
+                    else "duplicate_no_notion"
+                )
+                response["notion_page"] = notion_page
+
+            return response
+
         # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
         knowledge_db_id = run_async(create_base(video_id, user_id))
         logger.info(f"DB 초기 레코드 생성 성공: {knowledge_db_id}")
