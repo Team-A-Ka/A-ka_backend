@@ -18,8 +18,14 @@ from app.core.config import settings
 # DB 연결 엔진 설정
 engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
 
-# 실행마다 새로운 랜덤 카카오 ID 생성 — 이전 유저의 COMPLETED 데이터를 오타하지 않도록
-TEST_USER_ID = f"e2e_test_{uuid.uuid4().hex[:8]}"
+# 유사 영상 테스트용 고정 유저 — 같은 유저로 여러 영상을 누적 업로드할 때 사용
+# 테스트 완료 후 다시 랜덤으로 되돌리려면 아래 두 줄을 주석 처리하고
+# 랜덤 줄 주석을 해제할 것
+TEST_USER_ID = "e2e_fixed_user_01"
+
+# 매 실행마다 새 유저 생성 (기본 모드)
+# TEST_USER_ID = f"e2e_test_{uuid.uuid4().hex[:8]}"
+
 print(f"[*] 테스트 카카오 User ID: {TEST_USER_ID}")
 
 
@@ -109,7 +115,7 @@ def run_e2e_tests():
 
     # 1. UPLOAD (요약 포함) 테스트
     print("\n[테스트 1] UPLOAD 의도 웹훅 전송 (요약 파이프라인)")
-    video_id_upload = "F9dSJm2VPGk"  # 와인 두통 관련 영상 (약 5분)
+    video_id_upload = "SSY3JvrogaA"
     utterance_upload = f"https://www.youtube.com/watch?v={video_id_upload} 요약해줘"
 
     res, latency = send_webhook(utterance_upload)
@@ -144,7 +150,7 @@ def run_e2e_tests():
     # 3. SEARCH (RAG 검색) 테스트
     print("\n[테스트 3] SEARCH 의도 웹훅 전송 (RAG 파이프라인)")
     # 테스트 1에서 올린 와인 영상을 바탕으로 질문
-    utterance_search = "THC와 CBD의 차이를 설명해줘"
+    utterance_search = "무알콜 맥주는 알코올이 정말 알코올이 없나?"
 
     res, latency = send_webhook(utterance_search)
     print(f"✅ 웹훅 응답 수신 (지연시간: {latency:.4f}초)")

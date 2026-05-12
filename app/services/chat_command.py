@@ -8,6 +8,9 @@ from app.core.config import settings
 from app.schemas.intent import IntentExtraction, IntentType
 from app.services.search_service import search_and_answer
 from app.tasks.knowledge_tasks import run_core_pipeline_task, save_link_only_task
+from app.services.smtp_service import send_search_result_email
+from app.models.notion import NotionConnection
+from database import SessionLocal
 
 logger = get_task_logger(__name__)
 
@@ -20,21 +23,23 @@ class ChatCommandService:
         logger.info(f"입력된 텍스트: {user_message}")
         intent, detected_url = self.analyze_intent(user_message)
 
-        if intent == IntentType.UPLOAD.value:
+        if intent == IntentType.FIND_SIMILAR:
+            return self.handle_find_similar(user_id, detected_url)
+        if intent == IntentType.UPLOAD:
             return self.handle_upload(user_id, detected_url)
-        if intent == IntentType.SAVE_ONLY.value:
+        if intent == IntentType.SAVE_ONLY:
             return self.handle_save_only(user_id, detected_url)
-        if intent == IntentType.SEARCH.value:
+        if intent == IntentType.SEARCH:
             return self.handle_search(user_id, user_message)
 
         return {
-            "intent": intent,
+            "intent": intent.value,
             "detected_url": detected_url,
             "user_id": user_id,
         }
 
-    def analyze_intent(self, user_message: str) -> tuple[str, str | None]:
-        intent = IntentType.UNKNOWN.value
+    def analyze_intent(self, user_message: str) -> tuple[IntentType, str | None]:
+        intent = IntentType.UNKNOWN
         detected_url = None
         last_error: Exception | None = None
         parsed_successfully = False
@@ -48,6 +53,8 @@ class ChatCommandService:
                             "role": "system",
                             "content": (
                                 "사용자의 입력을 분석해 의도를 분류한다.\n"
+                                "FIND_SIMILAR: 유튜브 URL이 포함되어 있고, '비슷한', '관련된', '같은 주제', '유사한' 등 유사 영상 탐색을 요청한 경우. "
+                                "예: 'https://youtube.com/... 이 영상이랑 비슷한 것 찾아줘', '이 링크랑 관련된 영상 있어?'\n"
                                 "UPLOAD: 유튜브 URL이 포함되어 있고, 요약/분석을 요청하거나 URL만 보낸 경우.\n"
                                 "SAVE_ONLY: 유튜브 URL이 포함되어 있고, '저장만', '요약 말고 저장' 등 저장만 명시한 경우.\n"
                                 "SEARCH: URL 없이 정보·지식·내용을 묻거나 설명을 요청하는 질문. "
@@ -65,10 +72,10 @@ class ChatCommandService:
                 parsed_result = response.choices[0].message.parsed
                 parsed_successfully = True
                 if parsed_result:
-                    intent = parsed_result.intent.value
+                    intent = parsed_result.intent
                     detected_url = parsed_result.detected_url
                     logger.info(
-                        f"[AI Router] intent={intent}, detected_url={detected_url}"
+                        f"[AI Router] intent={intent.value}, detected_url={detected_url}"
                     )
                 break
             except Exception as exc:
@@ -86,14 +93,14 @@ class ChatCommandService:
         video_id = self.parse_youtube_video_id(detected_url)
         if not video_id:
             return {
-                "intent": "UPLOAD",
+                "intent": IntentType.UPLOAD.value,
                 "error": "Invalid Youtube URL",
                 "user_id": user_id,
             }
 
         result = run_core_pipeline_task(video_id, user_id)
         return {
-            "intent": "UPLOAD",
+            "intent": IntentType.UPLOAD.value,
             "detected_url": detected_url,
             "video_id": video_id,
             "user_id": user_id,
@@ -104,19 +111,45 @@ class ChatCommandService:
         video_id = self.parse_youtube_video_id(detected_url)
         if not video_id:
             return {
-                "intent": "SAVE_ONLY",
+                "intent": IntentType.SAVE_ONLY.value,
                 "error": "Invalid Youtube URL",
                 "user_id": user_id,
             }
 
         task = save_link_only_task.delay(video_id, user_id)
         return {
-            "intent": "SAVE_ONLY",
+            "intent": IntentType.SAVE_ONLY.value,
             "detected_url": detected_url,
             "video_id": video_id,
             "user_id": user_id,
             "task_id": task.id,
             "status": "QUEUED",
+        }
+
+    def handle_find_similar(self, user_id: int, detected_url: str | None) -> dict:
+        """FIND_SIMILAR: UPLOAD 파이프라인 트리거 후 Step 3에서 유사 영상 자동 검색.
+
+        find_similar_videos()는 publish_pipeline_result(Step 3)에 이미 붙어있어서
+        별도 호출 없이 파이프라인 완료 시 자동 실행됨.
+        결과(similar_videos)는 Notion/SMTP 담당이 Step 3 리턴값에서 꺼내 전달.
+        """
+        logger.info("➔ FIND_SIMILAR 의도 감지. UPLOAD 파이프라인 트리거")
+
+        video_id = self.parse_youtube_video_id(detected_url)
+        if not video_id:
+            return {
+                "intent": IntentType.FIND_SIMILAR.value,
+                "error": "Invalid Youtube URL",
+                "user_id": user_id,
+            }
+
+        result = run_core_pipeline_task(video_id, user_id)
+        return {
+            "intent": IntentType.FIND_SIMILAR.value,
+            "detected_url": detected_url,
+            "video_id": video_id,
+            "user_id": user_id,
+            "pipeline": result,
         }
 
     def handle_search(
@@ -127,10 +160,39 @@ class ChatCommandService:
         logger.info("➔ SEARCH 의도 감지. RAG 검색 파이프라인 실행")
 
         search_result = search_and_answer(user_id, user_message)
+
+        session = SessionLocal()
+        try:
+            # notion_connection 테이블에서 해당 사용자의 정보를 가져오기
+            conn = session.query(NotionConnection).filter_by(user_id=user_id).first()
+
+            # 이메일 정보 있는지 확인
+            if conn and conn.owner_user_email:
+                recipient_email = conn.owner_user_email
+
+                # 3. 이메일 발송
+                send_search_result_email(
+                    recipient_email=recipient_email,
+                    query=user_message,
+                    answer=search_result["answer"],
+                    chunks=search_result.get("chunks", []),
+                )
+                logger.info(f"노션 연동 메일({recipient_email})로 검색 결과 전송 완료")
+            else:
+                logger.warning(
+                    f"사용자 {user_id}의 NotionConnection 정보나 이메일이 없습니다."
+                )
+
+        except Exception as e:
+            logger.error(f"노션 이메일 조회 및 발송 중 오류: {e}")
+        finally:
+            session.close()
+
         return {
-            "intent": "SEARCH",
+            "intent": IntentType.SEARCH.value,
             "user_id": user_id,
-            "result": search_result,
+            "result": search_result["answer"],
+            "sources": search_result.get("sources", 0),
         }
 
     @staticmethod

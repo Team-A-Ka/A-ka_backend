@@ -4,6 +4,7 @@ from typing import Any
 from celery.utils.log import get_task_logger
 
 from app.repositories.knowledge import (
+    KnowledgeRepository,
     _update_chunk_embeddings,
     list_category_names,
     mark_failed,
@@ -18,14 +19,11 @@ from app.services.notion_connection_service import (
     resolve_internal_user_id,
 )
 from app.services.notion_service import NotionServiceError
+from app.services.search_service import find_similar_videos
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
-from database import async_session_maker
-from app.repositories.knowledge import KnowledgeRepository
-
-# TODO: Pydantic 기반 State 통일(structured_output)
-from database import SessionLocal
+from database import SessionLocal, async_session_maker
 
 logger = get_task_logger(__name__)
 
@@ -49,7 +47,7 @@ class KnowledgePipelineService:
     def collect_and_chunk(
         self,
         video_id: str,
-        user_id: str | int | None = None,
+        user_id: int | None = None,
     ) -> dict[str, Any]:
         try:
             metadata = self.youtube_service.get_metadata(video_id)
@@ -177,8 +175,20 @@ class KnowledgePipelineService:
                 video_id=video_id,
                 title=title,
                 full_summary=full_summary,
-                category=resolved_category,
             )
+            # 유사 영상 검색 — db_result에서 knowledge_id 꺼내 자기 자신 제외
+        similar_videos = []
+        if user_id and db_result:
+            current_knowledge_id = db_result.get("knowledge_id")
+            if current_knowledge_id:
+                try:
+                    similar_videos = find_similar_videos(
+                        user_id=int(user_id),
+                        summary=full_summary,
+                        current_knowledge_id=current_knowledge_id,
+                    )
+                except Exception as e:
+                    logger.warning(f"[유사 영상 검색] 실패 (파이프라인 영향 없음): {e}")
 
         logger.info(f"[Step 3] Completed video_id={video_id}, title={title}")
         return {
@@ -188,6 +198,7 @@ class KnowledgePipelineService:
             "resolved_category": resolved_category,
             "db_result": db_result,
             "notion_page": notion_page,
+            "similar_videos": similar_videos,
         }
 
     def handle_failure(self, video_id: str, task_id: str) -> None:
@@ -242,17 +253,6 @@ def save_summary_to_user_notion(
     finally:
         db.close()
 
-    def handle_failure(self, video_id: str, task_id: str):
-        """파이프라인 실패 시 Knowledge.status = FAILED.
-
-        chain.on_error()로 연결되어 Step 1/2/3 어느 단계 raise든 호출됨.
-        mark_failed는 best-effort — 핸들러 안에서 또 raise되어 연쇄 실패 나는 것을 방지.
-        """
-        logger.error(f"[Error] 파이프라인 에러 (video_id: {video_id}, task: {task_id})")
-        try:
-            asyncio.run(mark_failed(video_id, reason=f"Task {task_id} failed"))
-        except Exception as e:
-            logger.error(f"[Error] mark_failed 호출 실패: {e}")
 
 async def check_duplicate_hit_count(video_id: str, user_id: int):
     async with async_session_maker() as session:

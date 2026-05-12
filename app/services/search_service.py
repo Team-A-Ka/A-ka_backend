@@ -5,7 +5,7 @@ LangGraph 흐름:
   [vectorize_query] → [search_chunks] → (결과 있음?) → [generate_answer] → END
                                           (없음?)     → [no_result_reply] → END
 
-호출 위치: router_service.py → intent == "SEARCH" 분기
+호출 위치: chat_command.py → intent == "SEARCH" 분기
 """
 
 import logging
@@ -216,7 +216,108 @@ search_graph = build_search_graph()
 
 
 # ==========================================
-# 단일 진입점 — router_service.py에서 호출
+# 유사 영상 검색 — UPLOAD 완료 후 호출
+# ==========================================
+# 청크 기준 검색 상한 — 영상 단위로 압축할 것이므로 여유 있게 가져옴
+SIMILAR_TOP_CHUNKS = 20
+# 유사 영상 거리 임계값 — RAG 검색보다 엄격하게
+SIMILAR_DISTANCE_THRESHOLD = 0.8
+# 최종 반환 영상 수
+SIMILAR_TOP_N = 3
+
+
+def find_similar_videos(
+    user_id: int,
+    summary: str,
+    current_knowledge_id: str,
+) -> list[dict]:
+    """새로 업로드된 영상과 유사한 기존 저장 영상을 검색해 반환.
+
+    새 영상의 full_summary를 벡터화 → chunk 유사도 검색 →
+    knowledge_id 기준 그룹핑 → 상위 SIMILAR_TOP_N개 영상 리턴.
+    current_knowledge_id: 자기 자신 제외용
+    """
+    logger.info(f"[유사 영상 검색] 시작 (user_id={user_id})")
+
+    if not summary:
+        logger.warning("[유사 영상 검색] summary 없음 — 스킵")
+        return []
+
+    # 1. summary 벡터화
+    try:
+        response = openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=summary,
+        )
+        query_vector = response.data[0].embedding
+        if hasattr(response, "usage") and response.usage:
+            logger.info(f"  [토큰 사용량] 벡터화: {response.usage.total_tokens}")
+    except Exception as e:
+        logger.error(f"[유사 영상 검색] 벡터화 실패: {e}")
+        return []
+
+    vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+
+    # 2. pgvector 검색 (자기 자신 knowledge_id 제외)
+    # video_id 기준 그루핑 — 같은 영상이 중복 업로드돼도 하나로 묶임
+    session = SessionLocal()
+    try:
+        result = session.execute(
+            text(
+                """
+                SELECT ym.video_id,
+                       k.title,
+                       k.original_url,
+                       kc.embedding <=> CAST(:query_vec AS vector) AS distance
+                FROM youtube_knowledge_chunk kc
+                JOIN knowledge k  ON kc.knowledge_id = k.id
+                JOIN youtube_metadata ym ON ym.knowledge_id = k.id
+                WHERE k.user_id = :user_id
+                  AND k.id != CAST(:current_knowledge_id AS uuid)
+                  AND kc.embedding IS NOT NULL
+                  AND kc.embedding <=> CAST(:query_vec AS vector) < :threshold
+                ORDER BY kc.embedding <=> CAST(:query_vec AS vector)
+                LIMIT :top_k
+                """
+            ),
+            {
+                "query_vec": vector_str,
+                "user_id": user_id,
+                "current_knowledge_id": current_knowledge_id,
+                "threshold": SIMILAR_DISTANCE_THRESHOLD,
+                "top_k": SIMILAR_TOP_CHUNKS,
+            },
+        )
+        rows = [dict(row._mapping) for row in result]
+    except Exception as e:
+        logger.error(f"[유사 영상 검색] pgvector 쿼리 실패: {e}")
+        return []
+    finally:
+        session.close()
+
+    # 3. video_id 기준 그루핑 — 영상별 최소 distance만 유지
+    seen: dict[str, dict] = {}
+    for row in rows:
+        vid = str(row["video_id"])
+        if vid not in seen or row["distance"] < seen[vid]["distance"]:
+            seen[vid] = {
+                "title": row["title"],
+                "url": row["original_url"],
+                "distance": row["distance"],
+            }
+
+    # 4. distance 오름차순 정렬 후 상위 N개
+    top = sorted(seen.values(), key=lambda x: x["distance"])[:SIMILAR_TOP_N]
+
+    logger.info(f"[유사 영상 검색] 완료 — {len(top)}개 영상 발견")
+    for i, v in enumerate(top, 1):
+        logger.info(f"  [{i}] distance={v['distance']:.4f} | {v['title']}")
+
+    return [{"title": v["title"], "url": v["url"]} for v in top]
+
+
+# ==========================================
+# 단일 진입점 — chat_command.py에서 호출
 # ==========================================
 def search_and_answer(user_id: int, query: str) -> dict:
     """SEARCH 파이프라인 실행"""
@@ -238,4 +339,5 @@ def search_and_answer(user_id: int, query: str) -> dict:
     return {
         "answer": result["answer"],
         "sources": result["sources"],
+        "chunks": result.get("chunks", []),
     }

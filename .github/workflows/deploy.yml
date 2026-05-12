@@ -19,7 +19,7 @@ jobs:
           script: |
             cd ${{ secrets.EC2_APP_DIR }}
             git pull origin main
-            docker compose -f docker-compose.prod.yml up -d --build
+            docker compose -f docker-compose.prod.yml up -d --build web db redis
             docker compose -f docker-compose.prod.yml exec -T db psql -U zo_o -d aka_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
             docker compose -f docker-compose.prod.yml exec -T web uv run python -c "from database import Base, engine; import app.models; Base.metadata.create_all(bind=engine); print('tables created')"
-            docker compose -f docker-compose.prod.yml restart web worker
+            docker compose -f docker-compose.prod.yml restart web
