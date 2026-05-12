@@ -1,5 +1,6 @@
+import logging
+
 from celery import chain, shared_task
-from celery.utils.log import get_task_logger
 
 from app.core.celery_app import celery_app
 from app.repositories.knowledge import create_base, mark_failed
@@ -11,7 +12,7 @@ from app.services.knowledge_pipeline import (
 from app.services.save_only_service import SaveOnlyService
 from app.services.user_notification_service import send_user_processing_error_email
 
-logger = get_task_logger(__name__)
+logger = logging.getLogger("aka.upload")
 
 knowledge_pipeline_service = KnowledgePipelineService()
 save_only_service = SaveOnlyService()

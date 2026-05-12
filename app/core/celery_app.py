@@ -1,6 +1,9 @@
 import os
 from celery import Celery
 from app.core.config import settings
+from app.core.logging_config import setup_logging
+
+setup_logging()
 
 # Celery 앱 인스턴스 생성
 # Redis를 메시지 브로커(Broker)와 결과 저장소(Backend)로 모두 사용

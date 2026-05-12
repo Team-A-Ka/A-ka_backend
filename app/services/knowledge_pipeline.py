@@ -1,7 +1,7 @@
 import asyncio
+import logging
 from typing import Any
 
-from celery.utils.log import get_task_logger
 
 from app.models.knowledge import ProcessStatus
 from app.repositories.knowledge import (
@@ -25,7 +25,12 @@ from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
 from database import SessionLocal, async_session_maker
 
-logger = get_task_logger(__name__)
+# 메서드/함수 흐름에 따라 도메인 카테고리 logger를 분리한다.
+upload_logger = logging.getLogger("aka.upload")
+step1_logger = logging.getLogger("aka.upload.step1")
+step2_logger = logging.getLogger("aka.upload.step2")
+step3_logger = logging.getLogger("aka.upload.step3")
+notion_logger = logging.getLogger("aka.notion")
 
 
 def run_async(coro):
@@ -59,7 +64,7 @@ class KnowledgePipelineService:
                 "duration": 0,
             }
 
-        logger.info(f"Using YouTube API key: {bool(self.youtube_service.api_key)}")
+        step1_logger.info(f"Using YouTube API key: {bool(self.youtube_service.api_key)}")
 
         transcript_data = self.youtube_service.get_transcript(video_id)
         if isinstance(transcript_data, str) and transcript_data.startswith("Error"):
@@ -75,7 +80,7 @@ class KnowledgePipelineService:
             }
 
         chunks = chunk_by_time(refined_segments, 60000)
-        logger.info(f"[Step 1] Created {len(chunks)} chunks")
+        step1_logger.info(f"Created {len(chunks)} chunks")
 
         final_chunks = [
             {
@@ -88,8 +93,8 @@ class KnowledgePipelineService:
 
         saved_chunks = run_async(save_chunks_to_db(video_id, metadata, final_chunks))
         if saved_chunks:
-            logger.info(f"First chunk start_time: {saved_chunks[0]['start_time']}")
-            logger.info(f"First chunk content: {saved_chunks[0]['content'][:50]}")
+            step1_logger.info(f"First chunk start_time: {saved_chunks[0]['start_time']}")
+            step1_logger.info(f"First chunk content: {saved_chunks[0]['content'][:50]}")
 
         return {
             "video_id": video_id,
@@ -106,7 +111,7 @@ class KnowledgePipelineService:
 
         if not chunks:
             reason = f"자막/STT 추출 후 chunks 없음 (video_id={video_id})"
-            logger.warning(f"[Step 2] {reason}")
+            step2_logger.warning(reason)
             run_async(mark_failed(video_id, reason=reason))
             raise ValueError(reason)
 
@@ -129,15 +134,15 @@ class KnowledgePipelineService:
                 )
             )
         except Exception as exc:
-            logger.error(f"[Step 2] Failed to update knowledge result: {exc}")
+            step2_logger.error(f"Failed to update knowledge result: {exc}")
 
         if result.get("summarized_chunks"):
-            logger.info(
+            step2_logger.info(
                 f"Saving embeddings for {len(result['summarized_chunks'])} chunks"
             )
             run_async(_update_chunk_embeddings(result["summarized_chunks"]))
 
-        logger.info(f"[Step 2: LangGraph] Completed title={result['title']}")
+        step2_logger.info(f"LangGraph completed title={result['title']}")
         return result
 
     def publish_pipeline_result(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -157,7 +162,7 @@ class KnowledgePipelineService:
                 summary=full_summary,
                 existing_categories=existing_categories,
             )
-            logger.info(f"[Category] raw={raw_category}, resolved={resolved_category}")
+            step3_logger.info(f"Category raw={raw_category}, resolved={resolved_category}")
 
             db_result = run_async(
                 update_summary_result_to_db(
@@ -189,9 +194,9 @@ class KnowledgePipelineService:
                         current_knowledge_id=current_knowledge_id,
                     )
                 except Exception as e:
-                    logger.warning(f"[유사 영상 검색] 실패 (파이프라인 영향 없음): {e}")
+                    step3_logger.warning(f"유사 영상 검색 실패 (파이프라인 영향 없음): {e}")
 
-        logger.info(f"[Step 3] Completed video_id={video_id}, title={title}")
+        step3_logger.info(f"Completed video_id={video_id}, title={title}")
         return {
             "status": "Pipeline All Done",
             "video_id": video_id,
@@ -203,11 +208,11 @@ class KnowledgePipelineService:
         }
 
     def handle_failure(self, video_id: str, task_id: str) -> None:
-        logger.error(f"[Error] Pipeline failed (video_id={video_id}, task={task_id})")
+        upload_logger.error(f"Pipeline failed (video_id={video_id}, task={task_id})")
         try:
             run_async(mark_failed(video_id, reason=f"Task {task_id} failed"))
         except Exception as exc:
-            logger.error(f"[Error] Failed to mark pipeline failure: {exc}")
+            upload_logger.error(f"Failed to mark pipeline failure: {exc}")
 
 
 def save_summary_to_user_notion(
@@ -220,7 +225,7 @@ def save_summary_to_user_notion(
     try:
         internal_user_id = resolve_internal_user_id(db, user_id)
         if internal_user_id is None:
-            logger.warning(f"[Notion] user_id={user_id} could not be resolved.")
+            notion_logger.warning(f"user_id={user_id} could not be resolved.")
             return None
 
         page = create_summary_page_for_user(
@@ -231,15 +236,15 @@ def save_summary_to_user_notion(
             source_url=f"https://www.youtube.com/watch?v={video_id}",
         )
         if page is None:
-            logger.info(
-                f"[Notion] user_id={internal_user_id} has no ready Notion connection."
+            notion_logger.info(
+                f"user_id={internal_user_id} has no ready Notion connection."
             )
             return None
-        
-        logger.info(f"[Notion] Summary page saved: {page.get('url')}")
+
+        notion_logger.info(f"Summary page saved: {page.get('url')}")
         return {"id": page.get("id"), "url": page.get("url")}
     except Exception as exc:
-        logger.warning(f"[Notion] Failed to save summary page: {exc}")
+        notion_logger.warning(f"Failed to save summary page: {exc}")
         return None
     finally:
         db.close()

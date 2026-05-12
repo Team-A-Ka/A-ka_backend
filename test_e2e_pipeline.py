@@ -7,11 +7,17 @@ Celery 백그라운드 작업이 완료될 때까지 DB를 폴링(Polling)하여
 전체 시스템 흐름이 정상적으로 동작하는지 통합 검증합니다.
 """
 
-import urllib.request
+import io
 import json
-import time
 import sys
+import time
+import urllib.request
 import uuid
+
+# Windows cp949 인코딩 문제 방지
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+
 from sqlalchemy import create_engine, text
 from app.core.config import settings
 
@@ -174,10 +180,10 @@ def run_e2e_tests():
 
 
 if __name__ == "__main__":
-    # run_e2e_tests()
+    run_e2e_tests()
         # FIND_SIMILAR 단독 테스트
-    res, latency = send_webhook(
-        "https://www.youtube.com/watch?v=TzLBgclsxmo 이 영상이랑 비슷한 거 찾아줘"
-    )
-    print(f"응답: {res}")
-    print(f"지연: {latency:.4f}초")
+    # res, latency = send_webhook(
+    #     "https://www.youtube.com/watch?v=TzLBgclsxmo 이 영상이랑 비슷한 거 찾아줘"
+    # )
+    # print(f"응답: {res}")
+    # print(f"지연: {latency:.4f}초")

@@ -1,7 +1,8 @@
 import re
 import time
 
-from celery.utils.log import get_task_logger
+import logging
+
 from openai import OpenAI
 
 from app.core.config import settings
@@ -12,7 +13,7 @@ from app.services.smtp_service import send_search_result_email
 from app.models.notion import NotionConnection
 from database import SessionLocal
 
-logger = get_task_logger(__name__)
+logger = logging.getLogger("aka.intent")
 
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 

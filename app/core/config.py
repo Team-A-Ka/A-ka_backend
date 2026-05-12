@@ -67,6 +67,8 @@ class Settings(BaseSettings):
     def celery_result_backend(self) -> str:
         return self.CELERY_RESULT_BACKEND or self.REDIS_URL
 
+    SQL_ECHO: bool = False
+
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
