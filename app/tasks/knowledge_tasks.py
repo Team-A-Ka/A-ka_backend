@@ -117,6 +117,7 @@ def run_core_pipeline_task(video_id: str, user_id: int):
                 "user_id": user_id,
                 "duplicate": True,
                 "hit_count": duplicate_result["hit_count"],
+                "knowledge_id": duplicate_result["knowledge_id"],
             }
     
         # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
