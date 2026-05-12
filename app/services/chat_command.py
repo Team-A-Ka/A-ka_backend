@@ -73,9 +73,7 @@ class ChatCommandService:
                 break
             except Exception as exc:
                 last_error = exc
-                logger.error(
-                    f"Failed to analyze intent ({attempt + 1}/3): {exc}"
-                )
+                logger.error(f"Failed to analyze intent ({attempt + 1}/3): {exc}")
                 if attempt < 2:
                     time.sleep(1)
 
@@ -134,7 +132,6 @@ class ChatCommandService:
             "user_id": user_id,
             "result": search_result,
         }
-
 
     @staticmethod
     def parse_youtube_video_id(url: str | None) -> str | None:
