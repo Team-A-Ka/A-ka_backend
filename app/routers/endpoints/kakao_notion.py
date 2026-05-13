@@ -56,11 +56,12 @@ def kakao_notion_oauth_start(
     return NotionOAuthStartResponse(authorization_url=authorization_url)
 
 
-@router.post("/notion/oauth/start", response_model=KakaoWebhookResponse)
+@router.post("/notion/oauth/start")
 def kakao_notion_oauth_start_post(
     request: KakaoWebhookRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> KakaoWebhookResponse:
+    """실제 카카오톡 응답용"""
     kakao_user_id = request.userRequest.user.id
 
     user = get_or_create_kakao_user(
@@ -76,15 +77,23 @@ def kakao_notion_oauth_start_post(
     except NotionServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    return KakaoWebhookResponse(
-        version="2.0",
-        template=Template(
-            outputs=[
-                Output(
-                    simpleText=SimpleText(
-                        text=f"아래 링크를 눌러 Notion을 연결해주세요.\n{authorization_url}"
-                    )
-                )
+    return {
+        "version": "2.0",
+        "template": {
+            "outputs": [
+                {
+                    "basicCard": {
+                        "title": "Notion 연동하기",
+                        "description": "아래 버튼을 눌러 Notion 워크스페이스를 연결해주세요.",
+                        "buttons": [
+                            {
+                                "action": "webLink",
+                                "label": "Notion 연결",
+                                "webLinkUrl": authorization_url,
+                            }
+                        ],
+                    }
+                }
             ]
-        ),
-    )
+        },
+    }
