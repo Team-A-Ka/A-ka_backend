@@ -113,7 +113,9 @@ def summarize_youtube_to_notion(
         )
 
     try:
-        task_result = run_core_pipeline_task(video_id, current_user.id)
+        task_result = run_core_pipeline_task(
+            body.url, video_id, current_user.id, include_similar=False
+        )
     except Exception as exc:
         raise HTTPException(
             status_code=503,
