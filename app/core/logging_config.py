@@ -113,6 +113,30 @@ LOGGING_CONFIG: dict = {
     },
 }
 
+def setup_langsmith() -> None:
+    """LangSmith 트레이싱을 활성화합니다.
+
+    LangSmith는 os.environ에서 LANGCHAIN_* 키를 직접 읽기 때문에
+    pydantic-settings 값을 여기서 os.environ에 명시적으로 주입합니다.
+    LANGCHAIN_TRACING_V2=False(기본값)이면 아무것도 하지 않습니다.
+    """
+    import os
+    from app.core.config import settings
+
+    if not settings.LANGCHAIN_TRACING_V2:
+        return
+
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = settings.LANGCHAIN_API_KEY
+    os.environ["LANGCHAIN_PROJECT"] = settings.LANGCHAIN_PROJECT
+    os.environ["LANGCHAIN_ENDPOINT"] = settings.LANGCHAIN_ENDPOINT
+
+    import logging
+    logging.getLogger("aka").info(
+        f"[LangSmith] 트레이싱 활성화 — project={settings.LANGCHAIN_PROJECT}"
+    )
+
+
 def setup_logging() -> None:
     """dictConfig를 적용해 전체 로깅 설정을 초기화합니다.
 

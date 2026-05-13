@@ -9,6 +9,9 @@ LangGraph 흐름:
 """
 
 import logging
+import uuid
+
+from langchain_core.runnables import RunnableConfig
 from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
 from sqlalchemy import text
@@ -321,7 +324,8 @@ def find_similar_videos(
 # ==========================================
 def search_and_answer(user_id: int, query: str) -> dict:
     """SEARCH 파이프라인 실행"""
-    search_logger.info(f"시작 (user: {user_id}, query: {query[:30]}...)")
+    run_id = str(uuid.uuid4())
+    search_logger.info(f"시작 (user: {user_id}, query: {query[:30]}...) | langsmith_run_id={run_id}")
 
     result = search_graph.invoke(
         {
@@ -331,10 +335,11 @@ def search_and_answer(user_id: int, query: str) -> dict:
             "chunks": [],
             "answer": "",
             "sources": 0,
-        }
+        },
+        config=RunnableConfig(run_id=run_id),
     )
 
-    search_logger.info(f"완료 — 답변 생성됨 (출처: {result['sources']}개)")
+    search_logger.info(f"완료 — 답변 생성됨 (출처: {result['sources']}개) | langsmith_run_id={run_id}")
 
     return {
         "answer": result["answer"],

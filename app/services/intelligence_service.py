@@ -1,7 +1,8 @@
 import concurrent.futures
 import logging
+import uuid
 
-
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
 
@@ -150,6 +151,9 @@ intelligence_graph = build_intelligence_graph()
 
 class IntelligenceService:
     def run(self, data: dict) -> dict:
+        run_id = str(uuid.uuid4())
+        logger.info(f"LangGraph 시작 (video_id={data.get('video_id')}) | langsmith_run_id={run_id}")
+
         result = intelligence_graph.invoke(
             {
                 "video_id": data.get("video_id"),
@@ -159,8 +163,10 @@ class IntelligenceService:
                 "title": "",
                 "full_summary": "",
                 "category": "",
-            }
+            },
+            config=RunnableConfig(run_id=run_id),
         )
+        logger.info(f"LangGraph 완료 (video_id={data.get('video_id')}) | langsmith_run_id={run_id}")
 
         return {
             "video_id": data.get("video_id"),

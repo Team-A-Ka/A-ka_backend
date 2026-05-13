@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     )
     NOTION_OAUTH_AUTH_URL: str = "https://api.notion.com/v1/oauth/authorize"
 
+    # LangSmith (LangGraph 트레이싱)
+    # .env에서 LANGCHAIN_API_KEY 등을 설정하면 자동으로 활성화됩니다.
+    LANGCHAIN_TRACING_V2: bool = False
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "aka-backend"
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+
     @property
     def database_url(self) -> str:
         if self.DATABASE_URL:
