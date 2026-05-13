@@ -54,6 +54,7 @@ class KnowledgePipelineService:
         self,
         video_id: str,
         user_id: int | None = None,
+        include_similar: bool = False,
     ) -> dict[str, Any]:
         try:
             metadata = self.youtube_service.get_metadata(video_id)
@@ -78,6 +79,7 @@ class KnowledgePipelineService:
                 "user_id": user_id,
                 "metadata": metadata,
                 "chunks": [],
+                "include_similar": include_similar,
             }
 
         chunks = chunk_by_time(refined_segments, 60000)
@@ -102,6 +104,7 @@ class KnowledgePipelineService:
             "user_id": user_id,
             "metadata": metadata,
             "chunks": saved_chunks,
+            "include_similar": include_similar,
         }
 
     def run_intelligence(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -109,6 +112,7 @@ class KnowledgePipelineService:
         chunks = data.get("chunks", [])
         metadata = data.get("metadata")
         user_id = data.get("user_id")
+        include_similar = data.get("include_similar", False)
 
         if not chunks:
             reason = f"자막/STT 추출 후 chunks 없음 (video_id={video_id})"
@@ -124,6 +128,7 @@ class KnowledgePipelineService:
             }
         )
         result["user_id"] = user_id
+        result["include_similar"] = include_similar
 
         try:
             run_async(
@@ -152,6 +157,7 @@ class KnowledgePipelineService:
         title = data.get("title", "")
         full_summary = data.get("full_summary", "")
         raw_category = data.get("category")
+        include_similar = data.get("include_similar", False)
 
         db_result = None
         resolved_category = raw_category
@@ -182,9 +188,10 @@ class KnowledgePipelineService:
                 title=title,
                 full_summary=full_summary,
             )
-            # 유사 영상 검색 — db_result에서 knowledge_id 꺼내 자기 자신 제외
+            # 유사 영상 검색 — FIND_SIMILAR 의도(include_similar=True)일 때만 실행
+            # UPLOAD 의도는 자동 호출하지 않음
         similar_videos = []
-        if user_id and db_result:
+        if include_similar and user_id and db_result:
             current_knowledge_id = db_result.get("knowledge_id")
             if current_knowledge_id:
                 try:
