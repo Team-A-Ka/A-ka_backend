@@ -308,7 +308,6 @@ async def save_link_only(
             name = (category_name or "미분류").strip().replace(" ", "")[:50]
                         
             stmt = select(Category).where(
-                Category.user_id == user_id, 
                 Category.name == name
             )
             result = await session.execute(stmt)
@@ -316,7 +315,7 @@ async def save_link_only(
 
             if not category:
                 try:
-                    category = Category(user_id=user_id, name=name)
+                    category = Category(name=name)
                     session.add(category)
                     await session.flush()  # 새 카테고리 ID 발급
                 except IntegrityError:

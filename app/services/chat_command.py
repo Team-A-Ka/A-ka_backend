@@ -105,7 +105,7 @@ class ChatCommandService:
                 "user_id": user_id,
             }
 
-        result = run_core_pipeline_task(detected_url, video_id, user_id)
+        result = run_core_pipeline_task(video_id, user_id, detected_url)
         return {
             "intent": IntentType.UPLOAD.value,
             "detected_url": detected_url,

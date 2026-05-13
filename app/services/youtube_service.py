@@ -35,7 +35,7 @@ class YouTubeService:
             return parsed.path.lstrip("/").split("/")[0]
 
         return None
-
+    
     def is_shorts_url(self, url: str) -> bool:
         """URL을 확인하여 쇼츠 여부를 반환합니다."""
         from urllib.parse import urlparse

@@ -12,7 +12,7 @@ from app.services.knowledge_pipeline import (
 )
 from app.services.save_only_service import SaveOnlyService
 from app.services.user_notification_service import send_user_processing_error_email
-from app.services.youtube_service import YouTubeService
+from app.services.youtube_service import YouTubeService 
 
 logger = logging.getLogger("aka.upload")
 
@@ -98,7 +98,7 @@ def save_link_only_task(self, video_id: str, user_id: int, category_name: str = 
 # ==========================================
 # ⭐️ 파이프라인 진입점 — chat_command.py에서 호출
 # ==========================================
-def run_core_pipeline_task(url: str,video_id: str, user_id: int):
+def run_core_pipeline_task(video_id: str, user_id: int, url: str):
     """
     실행 순서 (순차 chain):
     (수집+청킹) → (LangGraph: 요약→벡터화→개요) → (완료)
