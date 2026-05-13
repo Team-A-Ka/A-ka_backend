@@ -1,7 +1,16 @@
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, ForeignKey, String, TIMESTAMP, Text, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    ForeignKey,
+    Index,
+    String,
+    TIMESTAMP,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -22,6 +31,8 @@ class NotionConnection(Base):
     access_token: Mapped[str] = mapped_column(Text, nullable=False)
     refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     parent_page_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    summary_database_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    summary_data_source_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     duplicated_template_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     owner_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     owner_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -35,4 +46,20 @@ class NotionConnection(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", name="uq_notion_connection_user_id"),
+        Index(
+            "uq_notion_connection_workspace_owner_user_id",
+            "workspace_id",
+            "owner_user_id",
+            unique=True,
+            postgresql_where=owner_user_id.isnot(None),
+        ),
+        Index(
+            "uq_notion_connection_workspace_owner_email_without_user_id",
+            "workspace_id",
+            func.lower(owner_user_email),
+            unique=True,
+            postgresql_where=(
+                owner_user_id.is_(None) & owner_user_email.isnot(None)
+            ),
+        ),
     )

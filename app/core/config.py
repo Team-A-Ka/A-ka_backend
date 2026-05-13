@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     )
     NOTION_OAUTH_AUTH_URL: str = "https://api.notion.com/v1/oauth/authorize"
 
+    # 카카오 user id만으로 Notion OAuth URL 발급(수동 연동). 비어 있으면 해당 라우트는 404.
+    KAKAO_NOTION_OAUTH_DEV_KEY: str = ""
+
     # LangSmith (LangGraph 트레이싱)
     # .env에서 LANGCHAIN_API_KEY 등을 설정하면 자동으로 활성화됩니다.
     LANGCHAIN_TRACING_V2: bool = False
