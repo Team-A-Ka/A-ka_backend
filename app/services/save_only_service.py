@@ -1,10 +1,10 @@
-from celery.utils.log import get_task_logger
+import logging
 
 from app.repositories.knowledge import save_link_only
 from app.services.knowledge_pipeline import run_async
 from app.services.youtube_service import YouTubeService
 
-logger = get_task_logger(__name__)
+logger = logging.getLogger("aka.save_only")
 
 
 class SaveOnlyService:

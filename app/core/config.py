@@ -37,9 +37,18 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str | None = None
     CELERY_RESULT_BACKEND: str | None = None
 
-    # External APIs
-    # LangGraph에서 활용할 OpenAI 통합과 외부 요약 적재용 Notion API 키입니다.
+    # External APIs — 채팅·임베딩 기본은 OpenAI(LLM_PRIMARY_PROVIDER=openai). 폴백은 키가 있을 때만 사용.
     OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    LLM_TEMPERATURE: float = 0.0
+    LLM_TIMEOUT: int = 30
+    LLM_PRIMARY_PROVIDER: str = "openai"
+    LLM_FALLBACKS: str = "gemini,anthropic"
+    GEMINI_MODEL: str = "gemini-2.0-flash"
+    ANTHROPIC_MODEL: str = "claude-3-5-haiku-latest"
+    GOOGLE_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
     YOUTUBE_API_KEY: str = ""
     NOTION_VERSION: str = "2026-03-11"
     NOTION_OAUTH_CLIENT_ID: str = ""
@@ -51,6 +60,13 @@ class Settings(BaseSettings):
 
     # 카카오 user id만으로 Notion OAuth URL 발급(수동 연동). 비어 있으면 해당 라우트는 404.
     KAKAO_NOTION_OAUTH_DEV_KEY: str = ""
+
+    # LangSmith (LangGraph 트레이싱)
+    # .env에서 LANGCHAIN_API_KEY 등을 설정하면 자동으로 활성화됩니다.
+    LANGCHAIN_TRACING_V2: bool = False
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "aka-backend"
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
 
     @property
     def database_url(self) -> str:
@@ -69,6 +85,8 @@ class Settings(BaseSettings):
     @property
     def celery_result_backend(self) -> str:
         return self.CELERY_RESULT_BACKEND or self.REDIS_URL
+
+    SQL_ECHO: bool = False
 
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587

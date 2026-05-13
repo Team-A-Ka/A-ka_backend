@@ -11,7 +11,7 @@ class IntentType(str, Enum):
     UNKNOWN = "UNKNOWN"          # 기타 일상 대화, 의미 없는 텍스트
 
 
-# OpenAI Structured Output을 위한 Pydantic Schema
+# 구조화 출력(LLM with_structured_output)용 Pydantic 스키마
 class IntentExtraction(BaseModel):
     intent: IntentType = Field(description="사용자 발화의 핵심 의도")
     detected_url: str | None = Field(
