@@ -17,6 +17,8 @@ from app.schemas.notion import NotionOAuthStartResponse
 from app.services.auth_service import get_or_create_kakao_user
 from app.services.notion_service import NotionService, NotionServiceError
 from database import get_db
+from typing import Any
+
 
 router = APIRouter()
 
@@ -60,7 +62,7 @@ def kakao_notion_oauth_start(
 def kakao_notion_oauth_start_post(
     request: KakaoWebhookRequest,
     db: Annotated[Session, Depends(get_db)],
-) -> KakaoWebhookResponse:
+) -> dict[str, Any]:
     """실제 카카오톡 응답용"""
     kakao_user_id = request.userRequest.user.id
 
