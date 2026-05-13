@@ -5,11 +5,21 @@
 - 비동기 세션: Celery 워커 내부의 고성능 비동기 DB 작업에 사용
 """
 
-from sqlalchemy import create_engine, NullPool
+from sqlalchemy import create_engine, MetaData, NullPool
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.core.config import settings
+
+# 마이그레이션 자동 생성 시 제약 이름을 일관되게 만들어주는 규칙.
+# alembic autogenerate가 이 규칙을 따라 이름을 붙인다.
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
 
 
 # ==========================================
@@ -49,7 +59,7 @@ SessionLocal = sessionmaker(
 
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 def get_db():

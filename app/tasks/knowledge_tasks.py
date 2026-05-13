@@ -25,8 +25,8 @@ youtube_service = YouTubeService()
 # Step 1: 수집 + 청킹
 # ==========================================
 @celery_app.task(bind=True, name="knowledge.collect_and_chunk")
-def collect_and_chunk_task(self, video_id: str, user_id: int):
-    return knowledge_pipeline_service.collect_and_chunk(video_id, user_id)
+def collect_and_chunk_task(self, video_id: str, user_id: int, include_similar: bool = False):
+    return knowledge_pipeline_service.collect_and_chunk(video_id, user_id, include_similar)
 
 
 # ==========================================
@@ -98,10 +98,18 @@ def save_link_only_task(self, video_id: str, user_id: int, category_name: str = 
 # ==========================================
 # ⭐️ 파이프라인 진입점 — chat_command.py에서 호출
 # ==========================================
-def run_core_pipeline_task(video_id: str, user_id: int, url: str):
+def run_core_pipeline_task(
+    url: str,
+    video_id: str,
+    user_id: int,
+    include_similar: bool = False,
+):
     """
     실행 순서 (순차 chain):
     (수집+청킹) → (LangGraph: 요약→벡터화→개요) → (완료)
+
+    include_similar=True면 Step3에서 find_similar_videos를 자동 호출 (FIND_SIMILAR 의도용).
+    UPLOAD 의도는 기본값 False라 유사검색이 발화하지 않는다.
     """
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
     try:
@@ -166,7 +174,7 @@ def run_core_pipeline_task(video_id: str, user_id: int, url: str):
         return "Failed to start pipeline: DB Error"
 
     workflow = chain(
-        collect_and_chunk_task.s(video_id, user_id),
+        collect_and_chunk_task.s(video_id, user_id, include_similar),
         run_intelligence_graph_task.s(),
         update_pipeline_status_task.s(),
     ).on_error(handle_pipeline_failure_task.s(video_id, user_id))

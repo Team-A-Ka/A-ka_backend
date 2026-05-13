@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import List, Optional, TYPE_CHECKING
-from sqlalchemy import String, BigInteger, ForeignKey, Text, TIMESTAMP, func, Enum as SQL_Enum
+from sqlalchemy import String, BigInteger, ForeignKey, Text, TIMESTAMP, func, Index, Enum as SQL_Enum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 import uuid
@@ -70,3 +70,14 @@ class YoutubeKnowledgeChunk(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
     knowledge: Mapped["Knowledge"] = relationship("Knowledge", back_populates="chunks")
+
+    __table_args__ = (
+        # pgvector HNSW 인덱스 — 코사인 거리(<=>) 기반 RAG/유사검색용
+        # 인덱스 없이는 풀스캔 → 청크 늘어날수록 검색 비용 절벽
+        Index(
+            "ix_youtube_knowledge_chunk_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )

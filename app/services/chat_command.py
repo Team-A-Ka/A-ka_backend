@@ -105,7 +105,9 @@ class ChatCommandService:
                 "user_id": user_id,
             }
 
-        result = run_core_pipeline_task(video_id, user_id, detected_url)
+        result = run_core_pipeline_task(
+            detected_url, video_id, user_id, include_similar=False
+        )
         return {
             "intent": IntentType.UPLOAD.value,
             "detected_url": detected_url,
@@ -151,7 +153,9 @@ class ChatCommandService:
                 "user_id": user_id,
             }
 
-        result = run_core_pipeline_task(detected_url, video_id, user_id)
+        result = run_core_pipeline_task(
+            detected_url, video_id, user_id, include_similar=True
+        )
 
         # 중복 영상은 파이프라인이 스킵되므로 유사 영상 검색을 직접 실행
         similar_videos = []
