@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.routers.endpoints import auth
+from app.routers.endpoints import kakao_notion
 from app.routers.endpoints import notion
 from app.routers.endpoints import webhook
 from app.routers.endpoints import youtube_transcript
@@ -7,12 +8,14 @@ from app.routers.endpoints import youtube_transcript
 api_router = APIRouter()
 
 api_router.include_router(auth.router, tags=["auth"])
-api_router.include_router(webhook.router, tags=["kakao"]) 
+api_router.include_router(webhook.router, tags=["kakao"])
+api_router.include_router(kakao_notion.router, prefix="/kakao", tags=["kakao_notion"])
 api_router.include_router(notion.router, prefix="/notion", tags=["notion"])
-api_router.include_router(youtube_transcript.router, prefix="/youtube", tags=["youtube"]) 
+api_router.include_router(
+    youtube_transcript.router, prefix="/youtube", tags=["youtube"]
+)
 
 # [디버그용] LangGraph 시각화 라우터 포함
 from app.routers.endpoints import debug_graph
-api_router.include_router(
-    debug_graph.router, prefix="/debug/graph", tags=["debug"]
-)
+
+api_router.include_router(debug_graph.router, prefix="/debug/graph", tags=["debug"])

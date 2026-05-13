@@ -3,8 +3,9 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.category import Category
 from app.models.knowledge import (
@@ -25,7 +26,9 @@ class KnowledgeRepository:
 
     async def get_or_create_category(self, category_name: str | None) -> Category:
         name = normalize_category_name(category_name)
-        result = await self.session.execute(select(Category).where(Category.name == name))
+        result = await self.session.execute(
+            select(Category).where(Category.name == name)
+        )
         category = result.scalars().first()
         if category is not None:
             return category
@@ -65,7 +68,9 @@ class KnowledgeRepository:
             self.session.add(youtube_metadata)
             await self.session.commit()
 
-            logger.info(f"Initial knowledge record created: knowledge_id={knowledge_id}")
+            logger.info(
+                f"Initial knowledge record created: knowledge_id={knowledge_id}"
+            )
             return knowledge_id
         except Exception as exc:
             await self.session.rollback()
@@ -83,11 +88,13 @@ class KnowledgeRepository:
                 Knowledge.user_id == user_id,
                 YoutubeMetadata.video_id == video_id,
             )
+            .options(selectinload(Knowledge.category))
+            .order_by(Knowledge.created_at.desc())
             .limit(1)
         )
 
         return result.scalars().first()
-    
+
     async def increase_hit_count(self, knowledge: Knowledge):
         knowledge.hit_count = (knowledge.hit_count or 0) + 1
         knowledge.updated_at = datetime.utcnow()
@@ -115,7 +122,9 @@ async def save_chunks_to_db(video_id: str, metadata: dict, chunks: list):
                 raise Exception(f"No Knowledge record found for video_id={video_id}.")
 
             metadata_result = await session.execute(
-                select(YoutubeMetadata).where(YoutubeMetadata.knowledge_id == knowledge_id)
+                select(YoutubeMetadata).where(
+                    YoutubeMetadata.knowledge_id == knowledge_id
+                )
             )
             youtube_metadata = metadata_result.scalars().first()
 
@@ -305,10 +314,10 @@ async def save_link_only(
                     # 2. 없으면 생성
                     category = Category(name="미분류")
                     session.add(category)
-                    await session.flush() 
+                    await session.flush()
                 except IntegrityError:
                     # 3. 만약 다른 워커가 먼저 만들었으면 에러 내지 말고 다시 조회해서 가져오기
-                    await session.rollback() # 에러 난 시도는 취소
+                    await session.rollback()  # 에러 난 시도는 취소
                     result = await session.execute(stmt)
                     category = result.scalars().first()
 

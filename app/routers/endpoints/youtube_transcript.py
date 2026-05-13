@@ -37,6 +37,8 @@ class YoutubeSummarizeResponse(BaseModel):
     status: str
     video_id: str
     task_id: str | None = None
+    hit_count: int | None = None
+    duplicate: bool | None = None
 
 
 @router.get("/transcript")
@@ -111,17 +113,42 @@ def summarize_youtube_to_notion(
         )
 
     try:
-        task_id = run_core_pipeline_task(video_id, current_user.id)
+        task_result = run_core_pipeline_task(video_id, current_user.id)
     except Exception as exc:
         raise HTTPException(
             status_code=503,
             detail=f"Failed to queue summary task: {exc}",
         ) from exc
 
+    status_text = "queued"
+    task_id = None
+    hit_count: int | None = None
+    duplicate: bool | None = None
+    if isinstance(task_result, dict):
+        status_text = str(task_result.get("status") or "queued")
+
+        task_id_value = task_result.get("task_id")
+        if task_id_value is not None:
+            task_id = str(task_id_value)
+
+        if task_result.get("hit_count") is not None:
+            hit_count = int(task_result["hit_count"])
+        if task_result.get("duplicate") is not None:
+            duplicate = bool(task_result["duplicate"])
+    elif task_result:
+        task_id = str(task_result)
+        if task_id.startswith("Failed"):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Failed to queue summary task: {task_id}",
+            )
+
     return YoutubeSummarizeResponse(
-        status="queued",
+        status=status_text,
         video_id=video_id,
         task_id=task_id,
+        hit_count=hit_count,
+        duplicate=duplicate,
     )
 
 

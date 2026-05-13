@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     )
     NOTION_OAUTH_AUTH_URL: str = "https://api.notion.com/v1/oauth/authorize"
 
+    # 카카오 user id만으로 Notion OAuth URL 발급(수동 연동). 비어 있으면 해당 라우트는 404.
+    KAKAO_NOTION_OAUTH_DEV_KEY: str = ""
+
     @property
     def database_url(self) -> str:
         if self.DATABASE_URL:

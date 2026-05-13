@@ -80,9 +80,7 @@ class ChatCommandService:
                 break
             except Exception as exc:
                 last_error = exc
-                logger.error(
-                    f"Failed to analyze intent ({attempt + 1}/3): {exc}"
-                )
+                logger.error(f"Failed to analyze intent ({attempt + 1}/3): {exc}")
                 if attempt < 2:
                     time.sleep(1)
 
@@ -167,21 +165,23 @@ class ChatCommandService:
         try:
             # notion_connection 테이블에서 해당 사용자의 정보를 가져오기
             conn = session.query(NotionConnection).filter_by(user_id=user_id).first()
-            
+
             # 이메일 정보 있는지 확인
             if conn and conn.owner_user_email:
                 recipient_email = conn.owner_user_email
-                
+
                 # 3. 이메일 발송
                 send_search_result_email(
                     recipient_email=recipient_email,
                     query=user_message,
                     answer=search_result["answer"],
-                    chunks=search_result.get("chunks", [])
+                    chunks=search_result.get("chunks", []),
                 )
                 logger.info(f"노션 연동 메일({recipient_email})로 검색 결과 전송 완료")
             else:
-                logger.warning(f"사용자 {user_id}의 NotionConnection 정보나 이메일이 없습니다.")
+                logger.warning(
+                    f"사용자 {user_id}의 NotionConnection 정보나 이메일이 없습니다."
+                )
 
         except Exception as e:
             logger.error(f"노션 이메일 조회 및 발송 중 오류: {e}")
@@ -192,7 +192,7 @@ class ChatCommandService:
             "intent": IntentType.SEARCH.value,
             "user_id": user_id,
             "result": search_result["answer"],
-            "sources": search_result.get("sources", 0)
+            "sources": search_result.get("sources", 0),
         }
 
     @staticmethod
