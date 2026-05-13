@@ -9,16 +9,23 @@ LangGraph 흐름:
 """
 
 import logging
-from openai import OpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from sqlalchemy import text
-from app.core.config import settings
+
+from app.core.llm import (
+    base_message_text,
+    get_llm,
+    get_openai_sdk_client,
+    openai_embedding_model_id,
+)
 from app.schemas.graph_state import SearchState
 from database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+openai_client = get_openai_sdk_client()
+_rag_llm = get_llm()
 
 
 # ==========================================
@@ -30,7 +37,7 @@ def vectorize_query(state: SearchState) -> dict:
     logger.info(f"[SEARCH 노드1: 벡터화] 시작")
 
     response = openai_client.embeddings.create(
-        model="text-embedding-3-small",
+        model=openai_embedding_model_id(),
         input=query,
     )
     query_vector = response.data[0].embedding
@@ -131,12 +138,10 @@ def generate_answer(state: SearchState) -> dict:
     context_text = "\n\n".join(context_parts)
 
     try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
+        response = _rag_llm.invoke(
+            [
+                SystemMessage(
+                    content=(
                         "너는 사용자가 저장한 유튜브 영상 내용을 기반으로 답변하는 AI 어시스턴트야. "
                         "아래 [검색 결과]는 사용자가 이전에 저장한 영상의 관련 내용이야. "
                         "이 내용을 근거로 질문에 답변해. "
@@ -144,16 +149,16 @@ def generate_answer(state: SearchState) -> dict:
                         "검색 결과에 없는 내용은 추측하지 말고 '저장된 영상에서는 해당 내용을 찾지 못했어요'라고 답해. "
                         "답변은 친절하고 간결하게 3~5문장으로 하고 반말은 하지 않는다."
                     ),
-                },
-                {
-                    "role": "user",
-                    "content": f"[검색 결과]\n{context_text}\n\n[질문]\n{query}",
-                },
+                ),
+                HumanMessage(
+                    content=f"[검색 결과]\n{context_text}\n\n[질문]\n{query}",
+                ),
             ],
         )
-        answer = response.choices[0].message.content.strip()
-        if response.usage:
-            logger.info(f"  [토큰 사용량] RAG 답변: {response.usage.total_tokens}")
+        answer = base_message_text(response)
+        usage_meta = getattr(response, "usage_metadata", None)
+        if usage_meta:
+            logger.info(f"  [토큰 사용량] RAG 답변: {usage_meta}")
     except Exception as e:
         logger.error(f"RAG 답변 생성 실패: {e}")
         answer = "답변 생성 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
@@ -246,7 +251,7 @@ def find_similar_videos(
     # 1. summary 벡터화
     try:
         response = openai_client.embeddings.create(
-            model="text-embedding-3-small",
+            model=openai_embedding_model_id(),
             input=summary,
         )
         query_vector = response.data[0].embedding

@@ -2,9 +2,9 @@ import re
 import time
 
 from celery.utils.log import get_task_logger
-from openai import OpenAI
+from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.core.config import settings
+from app.core.llm import get_chat_model_primary
 from app.schemas.intent import IntentExtraction, IntentType
 from app.services.search_service import search_and_answer
 from app.tasks.knowledge_tasks import run_core_pipeline_task, save_link_only_task
@@ -14,7 +14,16 @@ from database import SessionLocal
 
 logger = get_task_logger(__name__)
 
-openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+_intent_chain = None
+
+
+def _get_intent_chain():
+    global _intent_chain
+    if _intent_chain is None:
+        _intent_chain = get_chat_model_primary().with_structured_output(
+            IntentExtraction,
+        )
+    return _intent_chain
 
 
 class ChatCommandService:
@@ -46,12 +55,10 @@ class ChatCommandService:
 
         for attempt in range(3):
             try:
-                response = openai_client.beta.chat.completions.parse(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
+                parsed_result = _get_intent_chain().invoke(
+                    [
+                        SystemMessage(
+                            content=(
                                 "사용자의 입력을 분석해 의도를 분류한다.\n"
                                 "FIND_SIMILAR: 유튜브 URL이 포함되어 있고, '비슷한', '관련된', '같은 주제', '유사한' 등 유사 영상 탐색을 요청한 경우. "
                                 "예: 'https://youtube.com/... 이 영상이랑 비슷한 것 찾아줘', '이 링크랑 관련된 영상 있어?'\n"
@@ -63,13 +70,12 @@ class ChatCommandService:
                                 "예: '안녕', 'ㅋㅋ', '고마워'\n"
                                 "URL이 있으면 detected_url에 그대로 추출한다."
                             ),
-                        },
-                        {"role": "user", "content": user_message},
+                        ),
+                        HumanMessage(content=user_message),
                     ],
-                    response_format=IntentExtraction,
                 )
-
-                parsed_result = response.choices[0].message.parsed
+                if isinstance(parsed_result, dict):
+                    parsed_result = IntentExtraction.model_validate(parsed_result)
                 parsed_successfully = True
                 if parsed_result:
                     intent = parsed_result.intent
