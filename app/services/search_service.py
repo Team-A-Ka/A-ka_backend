@@ -9,6 +9,9 @@ LangGraph 흐름:
 """
 
 import logging
+import uuid
+
+from langchain_core.runnables import RunnableConfig
 from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
 from sqlalchemy import text
@@ -16,7 +19,9 @@ from app.core.config import settings
 from app.schemas.graph_state import SearchState
 from database import SessionLocal
 
-logger = logging.getLogger(__name__)
+# SEARCH RAG 그래프는 aka.search, find_similar_videos는 aka.similar로 분리
+search_logger = logging.getLogger("aka.search")
+similar_logger = logging.getLogger("aka.similar")
 
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
@@ -27,7 +32,7 @@ openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 def vectorize_query(state: SearchState) -> dict:
     """사용자 질문을 1536차원 벡터로 변환"""
     query = state.get("query", "")
-    logger.info(f"[SEARCH 노드1: 벡터화] 시작")
+    search_logger.info("노드1(벡터화) 시작")
 
     response = openai_client.embeddings.create(
         model="text-embedding-3-small",
@@ -35,9 +40,9 @@ def vectorize_query(state: SearchState) -> dict:
     )
     query_vector = response.data[0].embedding
     if hasattr(response, "usage") and response.usage:
-        logger.info(f"  [토큰 사용량] 벡터화: {response.usage.total_tokens}")
+        search_logger.debug(f"  토큰 사용량 (벡터화): {response.usage.total_tokens}")
 
-    logger.info(f"[SEARCH 노드1: 벡터화] 완료 (차원: {len(query_vector)})")
+    search_logger.info(f"노드1(벡터화) 완료 (차원: {len(query_vector)})")
     return {"query_vector": query_vector}
 
 
@@ -61,10 +66,10 @@ def search_chunks(state: SearchState) -> dict:
     query_vector = state.get("query_vector", [])
     internal_user_id = state.get("user_id")
 
-    logger.info(f"[SEARCH 노드2: 검색] 시작 (user_id={internal_user_id})")
+    search_logger.info(f"노드2(검색) 시작 (user_id={internal_user_id})")
 
     if not query_vector:
-        logger.warning("[SEARCH 노드2] query_vector 비어있음 — 검색 스킵")
+        search_logger.warning("노드2 query_vector 비어있음 — 검색 스킵")
         return {"chunks": [], "sources": 0}
 
     # pgvector 리터럴 — psycopg2/asyncpg 둘 다 안전하게 받는 string 형식
@@ -98,16 +103,16 @@ def search_chunks(state: SearchState) -> dict:
         )
         chunks = [dict(row._mapping) for row in result]
     except Exception as e:
-        logger.error(f"[SEARCH 노드2] pgvector 쿼리 실패: {e}")
+        search_logger.error(f"노드2 pgvector 쿼리 실패: {e}")
         chunks = []
     finally:
         session.close()
 
-    logger.info(f"[SEARCH 노드2: 검색] 완료 — {len(chunks)}개 청크 발견")
+    search_logger.info(f"노드2(검색) 완료 — {len(chunks)}개 청크 발견")
     for i, c in enumerate(chunks, 1):
         dist = c.get('distance', '?')
         title = c.get('title', '?')
-        logger.info(f"  [매칭 {i}] distance={dist:.4f} | {title}")
+        search_logger.debug(f"  매칭 {i}: distance={dist:.4f} | {title}")
     return {"chunks": chunks, "sources": len(chunks)}
 
 
@@ -119,7 +124,7 @@ def generate_answer(state: SearchState) -> dict:
     query = state.get("query", "")
     chunks = state.get("chunks", [])
 
-    logger.info(f"[SEARCH 노드3: RAG 답변] 시작 (context: {len(chunks)}개 청크)")
+    search_logger.info(f"노드3(RAG 답변) 시작 (context: {len(chunks)}개 청크)")
 
     context_parts = []
     for i, chunk in enumerate(chunks, 1):
@@ -153,15 +158,13 @@ def generate_answer(state: SearchState) -> dict:
         )
         answer = response.choices[0].message.content.strip()
         if response.usage:
-            logger.info(f"  [토큰 사용량] RAG 답변: {response.usage.total_tokens}")
+            search_logger.debug(f"  토큰 사용량 (RAG): {response.usage.total_tokens}")
     except Exception as e:
-        logger.error(f"RAG 답변 생성 실패: {e}")
+        search_logger.error(f"RAG 답변 생성 실패: {e}")
         answer = "답변 생성 중 오류가 발생했어요. 잠시 후 다시 시도해 주세요."
 
-    logger.info(f"[SEARCH 노드3: RAG 답변] 완료")
-    logger.info(f"========== [AI 답변 내용] ==========")
-    logger.info(f"{answer}")
-    logger.info(f"====================================")
+    search_logger.info("노드3(RAG 답변) 완료")
+    search_logger.info(f"AI 답변: {answer}")
     return {"answer": answer}
 
 
@@ -170,7 +173,7 @@ def generate_answer(state: SearchState) -> dict:
 # ==========================================
 def no_result_reply(state: SearchState) -> dict:
     """저장된 데이터가 없을 때 안내 메시지"""
-    logger.info(f"[SEARCH 노드3: 안내] 검색 결과 없음")
+    search_logger.info("노드3(안내) 검색 결과 없음")
     return {
         "answer": "아직 저장된 영상 데이터가 없어서 검색 결과가 없어요. 먼저 영상 링크를 보내주세요!"
     }
@@ -237,10 +240,10 @@ def find_similar_videos(
     knowledge_id 기준 그룹핑 → 상위 SIMILAR_TOP_N개 영상 리턴.
     current_knowledge_id: 자기 자신 제외용
     """
-    logger.info(f"[유사 영상 검색] 시작 (user_id={user_id})")
+    similar_logger.info(f"시작 (user_id={user_id})")
 
     if not summary:
-        logger.warning("[유사 영상 검색] summary 없음 — 스킵")
+        similar_logger.warning("summary 없음 — 스킵")
         return []
 
     # 1. summary 벡터화
@@ -251,9 +254,9 @@ def find_similar_videos(
         )
         query_vector = response.data[0].embedding
         if hasattr(response, "usage") and response.usage:
-            logger.info(f"  [토큰 사용량] 벡터화: {response.usage.total_tokens}")
+            similar_logger.debug(f"  토큰 사용량 (벡터화): {response.usage.total_tokens}")
     except Exception as e:
-        logger.error(f"[유사 영상 검색] 벡터화 실패: {e}")
+        similar_logger.error(f"벡터화 실패: {e}")
         return []
 
     vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
@@ -290,7 +293,7 @@ def find_similar_videos(
         )
         rows = [dict(row._mapping) for row in result]
     except Exception as e:
-        logger.error(f"[유사 영상 검색] pgvector 쿼리 실패: {e}")
+        similar_logger.error(f"pgvector 쿼리 실패: {e}")
         return []
     finally:
         session.close()
@@ -309,9 +312,9 @@ def find_similar_videos(
     # 4. distance 오름차순 정렬 후 상위 N개
     top = sorted(seen.values(), key=lambda x: x["distance"])[:SIMILAR_TOP_N]
 
-    logger.info(f"[유사 영상 검색] 완료 — {len(top)}개 영상 발견")
+    similar_logger.info(f"완료 — {len(top)}개 영상 발견")
     for i, v in enumerate(top, 1):
-        logger.info(f"  [{i}] distance={v['distance']:.4f} | {v['title']}")
+        similar_logger.debug(f"  [{i}] distance={v['distance']:.4f} | {v['title']}")
 
     return [{"title": v["title"], "url": v["url"]} for v in top]
 
@@ -321,7 +324,8 @@ def find_similar_videos(
 # ==========================================
 def search_and_answer(user_id: int, query: str) -> dict:
     """SEARCH 파이프라인 실행"""
-    logger.info(f"[SEARCH] 시작 (user: {user_id}, query: {query[:30]}...)")
+    run_id = str(uuid.uuid4())
+    search_logger.info(f"시작 (user: {user_id}, query: {query[:30]}...) | langsmith_run_id={run_id}")
 
     result = search_graph.invoke(
         {
@@ -331,10 +335,11 @@ def search_and_answer(user_id: int, query: str) -> dict:
             "chunks": [],
             "answer": "",
             "sources": 0,
-        }
+        },
+        config=RunnableConfig(run_id=run_id),
     )
 
-    logger.info(f"[SEARCH] 완료 — 답변 생성됨 (출처: {result['sources']}개)")
+    search_logger.info(f"완료 — 답변 생성됨 (출처: {result['sources']}개) | langsmith_run_id={run_id}")
 
     return {
         "answer": result["answer"],

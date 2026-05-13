@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.models.notion import NotionConnection
 from app.services.smtp_service import send_error_email_sync
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("aka.smtp")
 
 EMAIL_PATTERN = re.compile(
     r"(?<![A-Z0-9._%+-])"

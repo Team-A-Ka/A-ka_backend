@@ -1,13 +1,15 @@
 import concurrent.futures
+import logging
+import uuid
 
-from celery.utils.log import get_task_logger
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
 
 from app.core.config import settings
 from app.schemas.graph_state import IntelligenceState, VideoOverview
 
-logger = get_task_logger(__name__)
+logger = logging.getLogger("aka.upload.step2")
 
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
@@ -29,14 +31,14 @@ def _process_single_chunk(chunk):
         )
         summary = response.choices[0].message.content.strip()
         if response.usage:
-            logger.info(f"  chunk summary tokens: {response.usage.total_tokens}")
+            logger.debug(f"  chunk summary tokens: {response.usage.total_tokens}")
     except Exception as exc:
         logger.warning(
             f"  chunk {chunk.get('chunk_order', '?')} summary failed: {exc}"
         )
         summary = chunk.get("content", "")[:100] + "..."
 
-    logger.info(f"  chunk {chunk.get('chunk_order', '?')} summary done")
+    logger.debug(f"  chunk {chunk.get('chunk_order', '?')} summary done")
     return {**chunk, "summary": summary}
 
 
@@ -47,6 +49,7 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
     logger.info(
         f"[LangGraph: chunk summary] start (video_id={video_id}, chunks={len(chunks)})"
     )
+    # 완료 시점은 summarized_chunks 반환 후 info로 찍힘 (아래 return 이후 불가 → 호출자에서 처리)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         results = executor.map(_process_single_chunk, chunks)
@@ -78,7 +81,7 @@ def embed_summaries_node(state: IntelligenceState) -> dict:
             if index < len(embeddings):
                 chunk["embedding"] = embeddings[index]
         if hasattr(response, "usage") and response.usage:
-            logger.info(f"  embedding tokens: {response.usage.total_tokens}")
+            logger.debug(f"  embedding tokens: {response.usage.total_tokens}")
         if embeddings:
             logger.info(f"  embeddings created: {len(embeddings)}, dim={len(embeddings[0])}")
     except Exception as exc:
@@ -117,7 +120,7 @@ def generate_overview(state: IntelligenceState) -> dict:
         )
         overview = response.choices[0].message.parsed
         if response.usage:
-            logger.info(f"  overview tokens: {response.usage.total_tokens}")
+            logger.debug(f"  overview tokens: {response.usage.total_tokens}")
         title = overview.title
         full_summary = overview.full_summary
         category = overview.category
@@ -148,6 +151,9 @@ intelligence_graph = build_intelligence_graph()
 
 class IntelligenceService:
     def run(self, data: dict) -> dict:
+        run_id = str(uuid.uuid4())
+        logger.info(f"LangGraph 시작 (video_id={data.get('video_id')}) | langsmith_run_id={run_id}")
+
         result = intelligence_graph.invoke(
             {
                 "video_id": data.get("video_id"),
@@ -157,8 +163,10 @@ class IntelligenceService:
                 "title": "",
                 "full_summary": "",
                 "category": "",
-            }
+            },
+            config=RunnableConfig(run_id=run_id),
         )
+        logger.info(f"LangGraph 완료 (video_id={data.get('video_id')}) | langsmith_run_id={run_id}")
 
         return {
             "video_id": data.get("video_id"),

@@ -37,7 +37,7 @@ ASYNC_DATABASE_URL = DATABASE_URL.replace(
 # ==========================================
 engine = create_engine(
     SYNC_DATABASE_URL,
-    echo=True,
+    echo=settings.SQL_ECHO,
     pool_pre_ping=True,
 )
 
@@ -66,7 +66,7 @@ def get_db():
 # ==========================================
 async_engine = create_async_engine(
     ASYNC_DATABASE_URL,
-    echo=True,
+    echo=settings.SQL_ECHO,
     pool_pre_ping=True,
     poolclass=NullPool,
     connect_args={

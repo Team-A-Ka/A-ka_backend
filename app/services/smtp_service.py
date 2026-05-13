@@ -5,7 +5,7 @@ from email.message import EmailMessage
 
 from app.core.config import settings
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("aka.smtp")
 
 
 def send_error_email_sync(
