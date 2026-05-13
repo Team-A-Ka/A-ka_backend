@@ -99,7 +99,7 @@ class ChatCommandService:
                 "user_id": user_id,
             }
 
-        result = run_core_pipeline_task(video_id, user_id)
+        result = run_core_pipeline_task(detected_url, video_id, user_id)
         return {
             "intent": IntentType.UPLOAD.value,
             "detected_url": detected_url,
@@ -237,9 +237,9 @@ class ChatCommandService:
             return None
 
         pattern = (
-            r"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)"
-            r"|youtu\.be\/)([^\"&?\/\s]{11})"
-        )
+                    r"(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)"
+                    r"|youtu\.be\/)([^\"&?\/\s]{11})"
+                )
         match = re.search(pattern, url)
         if match:
             return match.group(1)
