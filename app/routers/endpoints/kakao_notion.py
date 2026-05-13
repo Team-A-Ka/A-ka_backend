@@ -82,7 +82,7 @@ def kakao_notion_oauth_start_post(
         "template": {
             "outputs": [
                 {
-                    "basicCard": {
+                    "textCard": {
                         "title": "Notion 연동하기",
                         "description": "아래 버튼을 눌러 Notion 워크스페이스를 연결해주세요.",
                         "buttons": [
