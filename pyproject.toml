@@ -18,6 +18,7 @@ dependencies = [
     "greenlet>=3.4.0",
     "isodate>=0.7.2",
     "langgraph>=1.1.9",
+    "langsmith>=0.3.0",
     "openai>=2.31.0",
     "openai-whisper>=20250625",
     "pgvector>=0.4.2",

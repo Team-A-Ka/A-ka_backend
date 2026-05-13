@@ -17,7 +17,7 @@ from app.models.knowledge import (
 )
 from database import async_session_maker
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("aka.db")
 
 
 class KnowledgeRepository:

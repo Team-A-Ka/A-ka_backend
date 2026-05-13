@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     # 카카오 user id만으로 Notion OAuth URL 발급(수동 연동). 비어 있으면 해당 라우트는 404.
     KAKAO_NOTION_OAUTH_DEV_KEY: str = ""
 
+    # LangSmith (LangGraph 트레이싱)
+    # .env에서 LANGCHAIN_API_KEY 등을 설정하면 자동으로 활성화됩니다.
+    LANGCHAIN_TRACING_V2: bool = False
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "aka-backend"
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+
     @property
     def database_url(self) -> str:
         if self.DATABASE_URL:
@@ -78,6 +85,8 @@ class Settings(BaseSettings):
     @property
     def celery_result_backend(self) -> str:
         return self.CELERY_RESULT_BACKEND or self.REDIS_URL
+
+    SQL_ECHO: bool = False
 
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587

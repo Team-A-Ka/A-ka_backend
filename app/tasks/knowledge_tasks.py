@@ -1,5 +1,6 @@
+import logging
+
 from celery import chain, shared_task
-from celery.utils.log import get_task_logger
 
 from app.core.celery_app import celery_app
 from app.repositories.knowledge import create_base, mark_failed
@@ -11,11 +12,13 @@ from app.services.knowledge_pipeline import (
 )
 from app.services.save_only_service import SaveOnlyService
 from app.services.user_notification_service import send_user_processing_error_email
+from app.services.youtube_service import YouTubeService
 
-logger = get_task_logger(__name__)
+logger = logging.getLogger("aka.upload")
 
 knowledge_pipeline_service = KnowledgePipelineService()
 save_only_service = SaveOnlyService()
+youtube_service = YouTubeService()
 
 
 # ==========================================
@@ -47,13 +50,12 @@ def update_pipeline_status_task(self, data: dict):
 # 에러 핸들러
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
-def handle_pipeline_failure_task(self, task_id, video_id: str, user_id: int):
-    result = knowledge_pipeline_service.handle_failure(
-        video_id, task_id or self.request.id
-    )
+def handle_pipeline_failure_task(self, request, exc, traceback, video_id: str, user_id: int):
+    task_id = getattr(request, "id", None) or str(request)
+    result = knowledge_pipeline_service.handle_failure(video_id, task_id)
     send_user_processing_error_email(
         user_id=user_id,
-        error=RuntimeError(f"Pipeline task failed: {task_id}"),
+        error=exc,
         user_message=f"https://www.youtube.com/watch?v={video_id}",
         context="YouTube summary pipeline",
     )
@@ -96,7 +98,7 @@ def save_link_only_task(self, video_id: str, user_id: int):
 # ==========================================
 # ⭐️ 파이프라인 진입점 — chat_command.py에서 호출
 # ==========================================
-def run_core_pipeline_task(video_id: str, user_id: int):
+def run_core_pipeline_task(url: str,video_id: str, user_id: int):
     """
     실행 순서 (순차 chain):
     (수집+청킹) → (LangGraph: 요약→벡터화→개요) → (완료)
@@ -105,7 +107,8 @@ def run_core_pipeline_task(video_id: str, user_id: int):
     try:
         duplicate_result = run_async(check_duplicate_hit_count(video_id, user_id))
 
-        if duplicate_result:
+        # FAILED 상태 영상은 재처리 허용 — duplicate 체크에서 제외
+        if duplicate_result and duplicate_result.get("status") != "FAILED":
             logger.info(
                 f"중복 영상 감지: video_id={video_id}, "
                 f"user_id={user_id}, hit_count={duplicate_result['hit_count']}"
@@ -117,7 +120,9 @@ def run_core_pipeline_task(video_id: str, user_id: int):
                 "status": "duplicate",
                 "duplicate": True,
                 "hit_count": duplicate_result["hit_count"],
+                "knowledge_id": duplicate_result["knowledge_id"],
             }
+        
 
             if duplicate_result.get("status") == "COMPLETED":
                 notion_page = save_summary_to_user_notion(
@@ -136,6 +141,15 @@ def run_core_pipeline_task(video_id: str, user_id: int):
                 response["notion_page"] = notion_page
 
             return response
+        
+        if youtube_service.is_shorts_url(url):
+            logger.info("[Shorts 감지] 요약 없이 즉시 저장을 시작합니다.")
+            result = save_link_only_task.delay(video_id, user_id)
+            
+            return {
+                "video_id": video_id,
+                "task_id": result.id,
+            }
 
         # 1. 파이프라인 시작 전에 Knowledge + YoutubeMetadata 빈 레코드 생성
         knowledge_db_id = run_async(create_base(video_id, user_id))
