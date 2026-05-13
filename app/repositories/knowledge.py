@@ -299,25 +299,28 @@ async def save_link_only(
     video_id: str,
     metadata: dict,
     user_id: int,
+    category_name: str = "미분류",
 ):
     knowledge_id = uuid.uuid4()
 
     async with async_session_maker() as session:
         try:
-            # 1. '미분류' 카테고리 찾기
-            stmt = select(Category).where(Category.name == "미분류")
+            name = (category_name or "미분류").strip().replace(" ", "")[:50]
+                        
+            stmt = select(Category).where(
+                Category.user_id == user_id, 
+                Category.name == name
+            )
             result = await session.execute(stmt)
             category = result.scalars().first()
 
             if not category:
                 try:
-                    # 2. 없으면 생성
-                    category = Category(name="미분류")
+                    category = Category(user_id=user_id, name=name)
                     session.add(category)
-                    await session.flush()
+                    await session.flush()  # 새 카테고리 ID 발급
                 except IntegrityError:
-                    # 3. 만약 다른 워커가 먼저 만들었으면 에러 내지 말고 다시 조회해서 가져오기
-                    await session.rollback()  # 에러 난 시도는 취소
+                    await session.rollback()
                     result = await session.execute(stmt)
                     category = result.scalars().first()
 

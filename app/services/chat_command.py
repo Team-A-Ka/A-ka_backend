@@ -115,8 +115,10 @@ class ChatCommandService:
                 "error": "Invalid Youtube URL",
                 "user_id": user_id,
             }
+        
+        category_name = "쇼츠" if "/shorts/" in (detected_url or "") else "미분류"
 
-        task = save_link_only_task.delay(video_id, user_id)
+        task = save_link_only_task.delay(video_id, user_id, category_name=category_name)
         return {
             "intent": IntentType.SAVE_ONLY.value,
             "detected_url": detected_url,
@@ -143,7 +145,7 @@ class ChatCommandService:
                 "user_id": user_id,
             }
 
-        result = run_core_pipeline_task(video_id, user_id)
+        result = run_core_pipeline_task(detected_url, video_id, user_id)
         return {
             "intent": IntentType.FIND_SIMILAR.value,
             "detected_url": detected_url,

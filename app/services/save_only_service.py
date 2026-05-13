@@ -11,12 +11,12 @@ class SaveOnlyService:
     def __init__(self):
         self.youtube_service = YouTubeService()
 
-    def save(self, video_id: str, user_id: int):
+    def save(self, video_id: str, user_id: int, category_name: str = "미분류") -> dict:
         metadata = self.youtube_service.get_metadata(video_id)
         title = metadata.get("video_title", f"영상 {video_id}")
 
         # DB 저장 (Knowledge + YoutubeMetadata, status=COMPLETED)
-        knowledge_id = run_async(save_link_only(video_id, metadata, user_id))
+        knowledge_id = run_async(save_link_only(video_id, metadata, user_id, category_name=category_name))
 
         logger.info(f"[단순 저장 완료] knowledge_id={knowledge_id}, 제목: {title}")
         return {
