@@ -225,6 +225,7 @@ async def update_summary_result_to_db(
                 "knowledge_id": str(knowledge.id),
                 "category_id": category.id,
                 "category_name": category.name,
+                "hit_count": knowledge.hit_count,
             }
         except Exception:
             await session.rollback()
