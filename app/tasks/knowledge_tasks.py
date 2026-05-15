@@ -113,6 +113,9 @@ def run_core_pipeline_task(
     """
     logger.info(f"====== 파이프라인 트리거 (video_id: {video_id}) ======")
     try:
+        is_shorts = youtube_service.is_shorts_url(url)
+        logger.info(f"[URL CHECK] url={url}, is_shorts={is_shorts}")
+
         duplicate_result = run_async(check_duplicate_hit_count(video_id, user_id))
 
         # FAILED 상태 영상은 재처리 허용 — duplicate 체크에서 제외
@@ -152,13 +155,18 @@ def run_core_pipeline_task(
                 response["notion_page"] = notion_page
 
             return response
-        
-        if youtube_service.is_shorts_url(url):
+                
+        if is_shorts:
             logger.info("[Shorts 감지] 요약 없이 즉시 저장을 시작합니다.")
-            result = save_link_only_task.delay(video_id, user_id, category_name="쇼츠")
-            
+            result = save_link_only_task.delay(
+                video_id,
+                user_id,
+                category_name="쇼츠",
+            )
+
             return {
                 "video_id": video_id,
+                "category": "쇼츠",
                 "task_id": result.id,
             }
 
