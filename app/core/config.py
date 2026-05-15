@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     """
 
     PROJECT_NAME: str = "A-Ka Backend"
+    # 공개 URL (카카오 webLink → OAuth 브릿지 등). 운영에서는 HTTPS 도메인.
+    API_BASE_URL: str = "http://127.0.0.1:8000"
 
     # Auth
     JWT_SECRET_KEY: str
