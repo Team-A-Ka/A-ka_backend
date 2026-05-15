@@ -140,12 +140,15 @@ def run_core_pipeline_task(
                     or f"YouTube summary {video_id}",
                     full_summary=duplicate_result.get("summary") or "Summary is empty.",
                     category=duplicate_result.get("category"),
+                    hit_count=duplicate_result.get("hit_count"),
                 )
-                response["status"] = (
-                    "duplicate_saved_to_notion"
-                    if notion_page
-                    else "duplicate_no_notion"
-                )
+                response["status"] = "duplicate_no_notion"
+                if notion_page:
+                    response["status"] = (
+                        "duplicate_hit_count_updated_in_notion"
+                        if notion_page.get("action") == "updated_hit_count"
+                        else "duplicate_saved_to_notion"
+                    )
                 response["notion_page"] = notion_page
 
             return response

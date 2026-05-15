@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 class IntelligenceState(TypedDict):
     """UPLOAD 파이프라인 — LangGraph 노드 간 공유 상태"""
     video_id: str             # Step 1 (입력) — 라우터에서 추출한 영상 ID
+    metadata: dict            # Step 1 — 영상 제목/채널명 등 메타데이터
     chunks: list              # Step 1 — 자막 추출+청킹 결과 (collect_and_chunk)
     summarized_chunks: list   # Step 2 노드1 — 청크별 요약 (summarize_each_chunk)
     embeddings: list          # Step 2 노드2 — 요약문 벡터화 (embed_summaries_node)
@@ -50,8 +51,19 @@ DEFAULT_CATEGORIES = [
 # ==========================================
 class VideoOverview(BaseModel):
     """전체 개요 생성 시 OpenAI가 반환해야 하는 구조"""
-    title: str = Field(description="영상의 핵심 주제를 나타내는 제목 (15자 이내)")
-    full_summary: str = Field(description="영상 전체 내용을 3~5문장으로 요약")
+    title: str = Field(
+        description=(
+            "원본 영상 제목을 그대로 복사하지 않고, 영상의 핵심 인물과 쟁점을 "
+            "내용 중심으로 요약한 새 제목 (25자 이내)"
+        )
+    )
+    full_summary: str = Field(
+        description=(
+            "영상을 보지 않아도 핵심 흐름을 이해할 수 있도록 사건 배경, "
+            "주요 주장, 근거, 쟁점을 압축해 담은 3~5문장의 핵심 요약. "
+            "재판 관련 영상이면 피고인 등 법적 지위를 이름과 함께 포함"
+        )
+    )
     category: str = Field(
         description=(
             "영상의 카테고리. 가능하면 다음 11개 중 하나로 분류할 것: "

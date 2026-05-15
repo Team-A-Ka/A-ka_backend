@@ -263,9 +263,15 @@ def ensure_summary_database(
                 connection.summary_data_source_id = fresh_ds
                 db.commit()
                 db.refresh(connection)
+            _ensure_summary_database_configuration(
+                service, connection, raise_errors=raise_errors
+            )
             return connection
 
     if connection.summary_data_source_id:
+        _ensure_summary_database_configuration(
+            service, connection, raise_errors=raise_errors
+        )
         return connection
 
     try:
@@ -338,7 +344,54 @@ def ensure_summary_database(
     connection.summary_data_source_id = data_source_id
     db.commit()
     db.refresh(connection)
+    _ensure_summary_database_configuration(
+        service, connection, raise_errors=raise_errors
+    )
     return connection
+
+
+def _ensure_summary_database_configuration(
+    service: NotionService,
+    connection: NotionConnection,
+    *,
+    raise_errors: bool,
+) -> None:
+    if not connection.summary_data_source_id:
+        return
+
+    try:
+        service.ensure_summary_database_schema(connection.summary_data_source_id)
+    except NotionServiceError as exc:
+        logger.warning(
+            "Could not ensure Notion summary database schema. "
+            "user_id=%s data_source_id=%s status=%s: %s",
+            connection.user_id,
+            connection.summary_data_source_id,
+            exc.status_code,
+            exc,
+        )
+        if raise_errors:
+            raise
+        return
+
+    if not connection.summary_database_id:
+        return
+
+    try:
+        service.ensure_hit_count_sorted_view(
+            database_id=connection.summary_database_id,
+            data_source_id=connection.summary_data_source_id,
+        )
+    except NotionServiceError as exc:
+        logger.warning(
+            "Could not ensure Notion hit-count sorted view. "
+            "user_id=%s database_id=%s data_source_id=%s status=%s: %s",
+            connection.user_id,
+            connection.summary_database_id,
+            connection.summary_data_source_id,
+            exc.status_code,
+            exc,
+        )
 
 
 def find_duplicate_notion_owner_connection(
@@ -453,6 +506,7 @@ def create_summary_page_for_user(
     summary: str,
     source_url: str | None = None,
     category: str | None = None,
+    hit_count: int | None = 1,
 ) -> dict[str, Any] | None:
     connection = get_notion_connection(db, user_id)
     if connection is None:
@@ -466,6 +520,7 @@ def create_summary_page_for_user(
             summary=summary,
             source_url=source_url,
             category=category,
+            hit_count=hit_count,
         )
     except NotionServiceError as exc:
         if exc.status_code == 404:
@@ -483,6 +538,7 @@ def create_summary_page_for_user(
                 summary=summary,
                 source_url=source_url,
                 category=category,
+                hit_count=hit_count,
             )
 
         if exc.status_code != 401 or not connection.refresh_token:
@@ -498,6 +554,7 @@ def create_summary_page_for_user(
             summary=summary,
             source_url=source_url,
             category=category,
+            hit_count=hit_count,
         )
     except NotionServiceError as exc:
         if exc.status_code != 404:
@@ -517,6 +574,7 @@ def create_summary_page_for_user(
             summary=summary,
             source_url=source_url,
             category=category,
+            hit_count=hit_count,
         )
 
 
@@ -527,18 +585,63 @@ def _create_summary_database_item_for_connection(
     summary: str,
     source_url: str | None,
     category: str | None,
+    hit_count: int | None,
 ) -> dict[str, Any] | None:
     connection = ensure_summary_database(db, connection, raise_errors=True)
     if not connection.summary_data_source_id:
         return None
 
-    return NotionService(api_key=connection.access_token).create_summary_database_item(
+    service = NotionService(api_key=connection.access_token)
+    if source_url:
+        existing_pages = service.find_summary_database_items_by_source_url(
+            connection.summary_data_source_id,
+            source_url,
+        )
+        if existing_pages:
+            existing_page = existing_pages[0]
+            page_id = existing_page.get("id")
+            if page_id and hit_count is not None:
+                updated_page = service.update_summary_database_item_hit_count(
+                    page_id,
+                    hit_count,
+                )
+                _archive_duplicate_summary_pages(service, existing_pages[1:])
+                updated_page["_a_ka_action"] = "updated_hit_count"
+                return updated_page
+
+            _archive_duplicate_summary_pages(service, existing_pages[1:])
+            existing_page["_a_ka_action"] = "existing"
+            return existing_page
+
+    created_page = service.create_summary_database_item(
         data_source_id=connection.summary_data_source_id,
         title=title,
         summary=summary,
         category=category,
         source_url=source_url,
+        hit_count=hit_count,
     )
+    created_page["_a_ka_action"] = "created"
+    return created_page
+
+
+def _archive_duplicate_summary_pages(
+    service: NotionService,
+    duplicate_pages: list[dict[str, Any]],
+) -> None:
+    for page in duplicate_pages:
+        page_id = page.get("id")
+        if not page_id:
+            continue
+        try:
+            service.archive_page(page_id)
+        except NotionServiceError as exc:
+            logger.warning(
+                "Failed to archive duplicate Notion summary row. page_id=%s status=%s: %s",
+                page_id,
+                exc.status_code,
+                exc,
+            )
 
 
 def _clear_summary_database_ids(
