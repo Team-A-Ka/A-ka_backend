@@ -380,3 +380,4 @@ docs/
 *.jpg
 *.png
 test_db_diag*.py
+tests/
