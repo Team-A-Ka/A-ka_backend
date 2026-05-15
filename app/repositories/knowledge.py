@@ -306,23 +306,8 @@ async def save_link_only(
 
     async with async_session_maker() as session:
         try:
-            name = (category_name or "미분류").strip().replace(" ", "")[:50]
-                        
-            stmt = select(Category).where(
-                Category.name == name
-            )
-            result = await session.execute(stmt)
-            category = result.scalars().first()
-
-            if not category:
-                try:
-                    category = Category(name=name)
-                    session.add(category)
-                    await session.flush()  # 새 카테고리 ID 발급
-                except IntegrityError:
-                    await session.rollback()
-                    result = await session.execute(stmt)
-                    category = result.scalars().first()
+            repo = KnowledgeRepository(session)
+            category = await repo.get_or_create_category(category_name)
 
             knowledge = Knowledge(
                 id=knowledge_id,
@@ -350,7 +335,7 @@ async def save_link_only(
             await session.commit()
 
             logger.info(
-                f"[SAVE_ONLY] Saved Knowledge+YoutubeMetadata with '미분류' category: "
+                f"[SAVE_ONLY] Saved Knowledge+YoutubeMetadata with category='{category.name}': "
                 f"knowledge_id={knowledge_id}, video_id={video_id}"
             )
             return knowledge_id
