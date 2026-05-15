@@ -70,7 +70,7 @@ LOGGING_CONFIG: dict = {
             "class": "logging.StreamHandler",
             "formatter": "default",
             "filters": ["category"],
-            "stream": "ext://sys.stdout",
+            # "stream": "ext://sys.stdout",
         },
     },
     "root": {
@@ -80,38 +80,50 @@ LOGGING_CONFIG: dict = {
     "loggers": {
         # ===== 애플리케이션 도메인 카테고리 =====
         # 진입 / 라우팅
-        "aka.webhook":      {"level": "INFO", "handlers": ["console"], "propagate": False},
-        "aka.intent":       {"level": "INFO", "handlers": ["console"], "propagate": False},
-
+        "aka.webhook": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "aka.intent": {"level": "INFO", "handlers": ["console"], "propagate": False},
         # UPLOAD/FIND_SIMILAR 파이프라인 (부모-자식 계층)
-        "aka.upload":       {"level": "INFO", "handlers": ["console"], "propagate": False},
-        "aka.upload.step1": {"level": "INFO", "handlers": ["console"], "propagate": False},
-        "aka.upload.step2": {"level": "INFO", "handlers": ["console"], "propagate": False},
-        "aka.upload.step3": {"level": "INFO", "handlers": ["console"], "propagate": False},
-
+        "aka.upload": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "aka.upload.step1": {
+            "level": "INFO",
+            "handlers": ["console"],
+            "propagate": False,
+        },
+        "aka.upload.step2": {
+            "level": "INFO",
+            "handlers": ["console"],
+            "propagate": False,
+        },
+        "aka.upload.step3": {
+            "level": "INFO",
+            "handlers": ["console"],
+            "propagate": False,
+        },
         # 단순 저장 / 검색 / 유사
-        "aka.save_only":    {"level": "INFO", "handlers": ["console"], "propagate": False},
-        "aka.search":       {"level": "INFO", "handlers": ["console"], "propagate": False},
-        "aka.similar":      {"level": "INFO", "handlers": ["console"], "propagate": False},
-
+        "aka.save_only": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "aka.search": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "aka.similar": {"level": "INFO", "handlers": ["console"], "propagate": False},
         # 외부 시스템
-        "aka.notion":       {"level": "INFO",    "handlers": ["console"], "propagate": False},
-        "aka.smtp":         {"level": "INFO",    "handlers": ["console"], "propagate": False},
-        "aka.youtube":      {"level": "INFO",    "handlers": ["console"], "propagate": False},
-
+        "aka.notion": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "aka.smtp": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "aka.youtube": {"level": "INFO", "handlers": ["console"], "propagate": False},
         # 인프라
-        "aka.db":           {"level": "WARNING", "handlers": ["console"], "propagate": False},
-        "aka.auth":         {"level": "INFO",    "handlers": ["console"], "propagate": False},
-
+        "aka.db": {"level": "WARNING", "handlers": ["console"], "propagate": False},
+        "aka.auth": {"level": "INFO", "handlers": ["console"], "propagate": False},
         # ===== 외부 라이브러리 노이즈 억제 =====
-        "sqlalchemy.engine": {"level": "WARNING", "handlers": ["console"], "propagate": False},
-        "httpx":             {"level": "WARNING", "propagate": False},
-        "httpcore":          {"level": "WARNING", "propagate": False},
-        "openai":            {"level": "WARNING", "propagate": False},
-        "celery":            {"level": "INFO",    "propagate": False},
-        "kombu":             {"level": "WARNING", "propagate": False},
+        "sqlalchemy.engine": {
+            "level": "WARNING",
+            "handlers": ["console"],
+            "propagate": False,
+        },
+        "httpx": {"level": "WARNING", "propagate": False},
+        "httpcore": {"level": "WARNING", "propagate": False},
+        "openai": {"level": "WARNING", "propagate": False},
+        "celery": {"level": "INFO", "propagate": False},
+        "kombu": {"level": "WARNING", "propagate": False},
     },
 }
+
 
 def setup_langsmith() -> None:
     """LangSmith 트레이싱을 활성화합니다.
@@ -132,6 +144,7 @@ def setup_langsmith() -> None:
     os.environ["LANGCHAIN_ENDPOINT"] = settings.LANGCHAIN_ENDPOINT
 
     import logging
+
     logging.getLogger("aka").info(
         f"[LangSmith] 트레이싱 활성화 — project={settings.LANGCHAIN_PROJECT}"
     )
