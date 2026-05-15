@@ -122,6 +122,31 @@ def run_core_pipeline_task(
                 f"user_id={user_id}, hit_count={duplicate_result['hit_count']}"
             )
 
+            # SAVE_ONLY로만 저장된 레코드 (summary 없는 COMPLETED)
+            # UPLOAD 요청이면 파이프라인을 실행해 요약 생성
+            # SAVE_ONLY 요청(include_similar=False이며 호출 맥락이 save_only)이면 중복 반환
+            if duplicate_result.get("needs_summary"):
+                if include_similar is not None:
+                    # UPLOAD / FIND_SIMILAR 의도 → 요약 파이프라인 실행
+                    logger.info(
+                        f"[SAVE_ONLY→UPLOAD] summary 없는 중복 레코드 감지 — "
+                        f"파이프라인 실행해 요약 생성 (knowledge_id={duplicate_result['knowledge_id']})"
+                    )
+                    # 기존 레코드 재사용 (create_base 스킵) — 파이프라인에 knowledge_id 전달
+                    workflow = chain(
+                        collect_and_chunk_task.s(video_id, user_id, include_similar),
+                        run_intelligence_graph_task.s(),
+                        update_pipeline_status_task.s(),
+                    ).on_error(handle_pipeline_failure_task.s(video_id, user_id))
+                    result = workflow.delay()
+                    return {
+                        "video_id": video_id,
+                        "status": "QUEUED_SUMMARY",
+                        "task_id": result.id,
+                        "hit_count": duplicate_result["hit_count"],
+                        "knowledge_id": duplicate_result["knowledge_id"],
+                    }
+
             response = {
                 "video_id": video_id,
                 "user_id": user_id,
@@ -130,9 +155,8 @@ def run_core_pipeline_task(
                 "hit_count": duplicate_result["hit_count"],
                 "knowledge_id": duplicate_result["knowledge_id"],
             }
-        
 
-            if duplicate_result.get("status") == "COMPLETED":
+            if duplicate_result.get("status") == "COMPLETED" and not duplicate_result.get("needs_summary"):
                 notion_page = save_summary_to_user_notion(
                     user_id=user_id,
                     video_id=video_id,

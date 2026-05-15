@@ -299,23 +299,20 @@ async def check_duplicate_hit_count(video_id: str, user_id: int):
         if existing_status == "FAILED":
             return duplicate_result
 
-        # SAVE_ONLY로 저장된 레코드 — summary 없는 COMPLETED
-        # 전체 파이프라인(요약·임베딩)을 아직 돌리지 않은 상태이므로
-        # 중복으로 취급하지 않고 None 반환 → 파이프라인 정상 실행
+        # hit_count는 상태에 관계없이 항상 증가
+        updated_knowledge = await knowledge_repository.increase_hit_count(
+            existing_knowledge
+        )
+        duplicate_result["hit_count"] = updated_knowledge.hit_count
+        duplicate_result["counted"] = True
+
+        # summary 없는 COMPLETED (SAVE_ONLY로 저장된 레코드)
+        # → hit_count는 올렸지만, 요약 파이프라인은 아직 미실행
+        # → needs_summary=True 반환: 호출 측에서 UPLOAD이면 파이프라인 실행
         if existing_status == "COMPLETED" and not existing_knowledge.summary:
-            return None
-
-        # COMPLETED 상태(요약 있음)일 때만 hit_count 증가
-        if existing_status == "COMPLETED":
-            updated_knowledge = await knowledge_repository.increase_hit_count(
-                existing_knowledge
-            )
-
-            duplicate_result["hit_count"] = updated_knowledge.hit_count
-            duplicate_result["counted"] = True
+            duplicate_result["needs_summary"] = True
             return duplicate_result
 
-        # PENDING 등은 증가 X
         return duplicate_result
 
 
