@@ -1,3 +1,5 @@
+import logging
+
 from youtube_transcript_api import YouTubeTranscriptApi
 from urllib.parse import urlparse, parse_qs
 import os
@@ -11,8 +13,12 @@ from yt_dlp import YoutubeDL
 from ..core.config import settings
 
 
+logger = logging.getLogger(__name__)
+
+
 class YouTubeService:
     BASE_URL = "https://www.googleapis.com/youtube/v3/videos"
+    OEMBED_URL = "https://www.youtube.com/oembed"
 
     # whisper_model (tiny < base < small < medium < large)
     def __init__(self, whisper_model_name: str = "base"):
@@ -35,7 +41,7 @@ class YouTubeService:
             return parsed.path.lstrip("/").split("/")[0]
 
         return None
-
+    
     def is_shorts_url(self, url: str) -> bool:
         """URL을 확인하여 쇼츠 여부를 반환합니다."""
         from urllib.parse import urlparse
@@ -44,6 +50,26 @@ class YouTubeService:
     
     ###### youtube metadata 추출 ######
     def get_metadata(self, video_id: str) -> dict:
+        try:
+            return self._fetch_metadata_via_data_api(video_id)
+        except Exception as exc:
+            logger.warning(
+                "YouTube Data API failed for video_id=%s (%s); "
+                "falling back to oEmbed.",
+                video_id,
+                exc,
+            )
+
+        oembed_metadata = self._fetch_metadata_via_oembed(video_id)
+        if oembed_metadata is not None:
+            return oembed_metadata
+
+        raise ValueError(f"YouTube metadata not found for video_id={video_id}")
+
+    def _fetch_metadata_via_data_api(self, video_id: str) -> dict:
+        if not self.api_key:
+            raise RuntimeError("YOUTUBE_API_KEY is not configured")
+
         params = {
             "part": "snippet,contentDetails",
             "id": video_id,
@@ -59,7 +85,6 @@ class YouTubeService:
             raise ValueError("YouTube metadata not found")
 
         item = items[0]
-
         snippet = item["snippet"]
         content_details = item["contentDetails"]
 
@@ -71,6 +96,38 @@ class YouTubeService:
             "video_title": snippet["title"],
             "channel_name": snippet["channelTitle"],
             "duration": duration_ms,
+        }
+
+    def _fetch_metadata_via_oembed(self, video_id: str) -> dict | None:
+        """Fallback that uses the public, key-less oEmbed endpoint.
+
+        Only title and channel name are available from oEmbed; duration is set
+        to 0 and should be filled in later if needed.
+        """
+        try:
+            resp = requests.get(
+                self.OEMBED_URL,
+                params={
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "format": "json",
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as exc:
+            logger.warning(
+                "YouTube oEmbed fallback failed for video_id=%s: %s",
+                video_id,
+                exc,
+            )
+            return None
+
+        return {
+            "video_id": video_id,
+            "video_title": payload.get("title") or "Unknown",
+            "channel_name": payload.get("author_name") or "Unknown",
+            "duration": 0,
         }
 
     def get_transcript(self, video_id: str, language="ko"):

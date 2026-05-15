@@ -12,7 +12,7 @@ from app.services.knowledge_pipeline import (
 )
 from app.services.save_only_service import SaveOnlyService
 from app.services.user_notification_service import send_user_processing_error_email
-from app.services.youtube_service import YouTubeService
+from app.services.youtube_service import YouTubeService 
 
 logger = logging.getLogger("aka.upload")
 
@@ -66,13 +66,13 @@ def handle_pipeline_failure_task(self, request, exc, traceback, video_id: str, u
 # 단순 링크 저장 (SAVE_ONLY) 진입점
 # ==========================================
 @shared_task(bind=True, name="knowledge.save_link_only", max_retries=3)
-def save_link_only_task(self, video_id: str, user_id: int):
+def save_link_only_task(self, video_id: str, user_id: int, category_name: str = "미분류"):
     """
     LangGraph 요약을 타지 않고 단순 링크만 저장.
     Celery retry 모두 소진 시 status=FAILED 마킹 후 raise.
     """
     try:
-        return save_only_service.save(video_id, user_id)
+        return save_only_service.save(video_id, user_id, category_name=category_name)
 
     except Exception as exc:
         # 재시도 여력 있으면 retry, 없으면 status=FAILED 마킹 후 최종 raise
@@ -140,19 +140,22 @@ def run_core_pipeline_task(
                     or f"YouTube summary {video_id}",
                     full_summary=duplicate_result.get("summary") or "Summary is empty.",
                     category=duplicate_result.get("category"),
+                    hit_count=duplicate_result.get("hit_count"),
                 )
-                response["status"] = (
-                    "duplicate_saved_to_notion"
-                    if notion_page
-                    else "duplicate_no_notion"
-                )
+                response["status"] = "duplicate_no_notion"
+                if notion_page:
+                    response["status"] = (
+                        "duplicate_hit_count_updated_in_notion"
+                        if notion_page.get("action") == "updated_hit_count"
+                        else "duplicate_saved_to_notion"
+                    )
                 response["notion_page"] = notion_page
 
             return response
         
         if youtube_service.is_shorts_url(url):
             logger.info("[Shorts 감지] 요약 없이 즉시 저장을 시작합니다.")
-            result = save_link_only_task.delay(video_id, user_id)
+            result = save_link_only_task.delay(video_id, user_id, category_name="쇼츠")
             
             return {
                 "video_id": video_id,

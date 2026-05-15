@@ -182,11 +182,14 @@ class KnowledgePipelineService:
 
         notion_page = None
         if user_id:
+            hit_count = db_result.get("hit_count", 1) if db_result else 1
             notion_page = save_summary_to_user_notion(
                 user_id=user_id,
                 video_id=video_id,
                 title=title,
                 full_summary=full_summary,
+                category=resolved_category,
+                hit_count=hit_count,
             )
             # 유사 영상 검색 — FIND_SIMILAR 의도(include_similar=True)일 때만 실행
             # UPLOAD 의도는 자동 호출하지 않음
@@ -228,6 +231,7 @@ def save_summary_to_user_notion(
     title: str,
     full_summary: str,
     category: str | None = None,
+    hit_count: int | None = 1,
 ) -> dict[str, Any] | None:
     db = SessionLocal()
     try:
@@ -243,6 +247,7 @@ def save_summary_to_user_notion(
             summary=full_summary or "Summary is empty.",
             source_url=f"https://www.youtube.com/watch?v={video_id}",
             category=category,
+            hit_count=hit_count,
         )
         if page is None:
             notion_logger.info(
@@ -251,7 +256,11 @@ def save_summary_to_user_notion(
             return None
 
         notion_logger.info(f"Summary page saved: {page.get('url')}")
-        return {"id": page.get("id"), "url": page.get("url")}
+        return {
+            "id": page.get("id"),
+            "url": page.get("url"),
+            "action": page.get("_a_ka_action"),
+        }
     except NotionServiceError as exc:
         notion_logger.warning(
             "Notion API error (user_id=%s status=%s): %s",
