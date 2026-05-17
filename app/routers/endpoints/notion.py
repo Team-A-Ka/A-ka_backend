@@ -1,8 +1,9 @@
+import html
 import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.auth_dependencies import get_current_user
@@ -61,7 +62,7 @@ def handle_notion_oauth_callback(
     state: str | None = None,
     error: str | None = None,
     error_description: str | None = None,
-) -> NotionOAuthCallbackResponse | RedirectResponse:
+) -> NotionOAuthCallbackResponse | RedirectResponse | HTMLResponse:
     """
     notion token API 호출
     """
@@ -78,6 +79,7 @@ def handle_notion_oauth_callback(
 
     try:
         user_id = notion_service.decode_oauth_state(state)
+        oauth_channel = notion_service.oauth_state_channel(state)
         token_payload = notion_service.exchange_oauth_code(code)
     except NotionServiceError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
@@ -93,6 +95,9 @@ def handle_notion_oauth_callback(
     except NotionServiceError as exc:
         db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    if oauth_channel == "kakao":
+        return _kakao_oauth_success_html(connection)
 
     return _oauth_callback_response(connection)
 
@@ -295,6 +300,45 @@ def _connection_payload(connection: NotionConnection) -> dict[str, Any]:
         "summary_data_source_id": connection.summary_data_source_id,
         "duplicated_template_id": connection.duplicated_template_id,
     }
+
+
+def _kakao_oauth_success_html(connection: NotionConnection) -> HTMLResponse:
+    workspace = html.escape(connection.workspace_name or "워크스페이스")
+    return HTMLResponse(
+        content=f"""
+        <!doctype html>
+        <html lang="ko">
+        <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>Notion 연동 완료</title>
+            <style>
+                body {{
+                    font-family: sans-serif;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                    margin: 0;
+                    padding: 24px;
+                    box-sizing: border-box;
+                    text-align: center;
+                    background: #f7f7f7;
+                }}
+                h2 {{ margin-bottom: 8px; }}
+                p {{ color: #555; line-height: 1.6; max-width: 320px; }}
+            </style>
+        </head>
+        <body>
+            <h2>Notion 연동이 완료되었습니다</h2>
+            <p><strong>{workspace}</strong> 워크스페이스와 연결되었습니다.</p>
+            <p>이제 카카오톡으로 돌아가서 영상 링크를 보내 주세요.</p>
+        </body>
+        </html>
+        """,
+        status_code=status.HTTP_200_OK,
+    )
 
 
 def _oauth_callback_response(
