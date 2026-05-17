@@ -157,17 +157,19 @@ class NotionService:
         )
         return f"{settings.NOTION_OAUTH_AUTH_URL}?{query}"
 
-    def create_oauth_state(self, user_id: int) -> str:
+    def create_oauth_state(self, user_id: int, channel: str | None = None) -> str:
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-        payload = {
+        payload: dict[str, Any] = {
             "sub": str(user_id),
             "type": self.oauth_state_type,
             "nonce": secrets.token_urlsafe(16),
             "exp": expires_at,
         }
+        if channel:
+            payload["channel"] = channel
         return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
-    def decode_oauth_state(self, state: str) -> int:
+    def _decode_oauth_state_payload(self, state: str) -> dict[str, Any]:
         try:
             payload = jwt.decode(
                 state,
@@ -176,9 +178,18 @@ class NotionService:
             )
             if payload.get("type") != self.oauth_state_type:
                 raise ValueError("Invalid OAuth state type")
-            return int(payload["sub"])
+            return payload
         except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
             raise NotionServiceError("Invalid Notion OAuth state.", status_code=400) from exc
+
+    def decode_oauth_state(self, state: str) -> int:
+        return int(self._decode_oauth_state_payload(state)["sub"])
+
+    def oauth_state_channel(self, state: str) -> str | None:
+        channel = self._decode_oauth_state_payload(state).get("channel")
+        if channel is None:
+            return None
+        return str(channel)
 
     def exchange_oauth_code(self, code: str) -> dict[str, Any]:
         return self._oauth_request(
