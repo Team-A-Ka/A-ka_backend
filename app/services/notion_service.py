@@ -472,6 +472,7 @@ class NotionService:
         data_source_id: str,
         title: str,
         summary: str,
+        body_summary: str | None = None,
         category: str | None = None,
         source_url: str | None = None,
         saved_at: datetime | None = None,
@@ -508,7 +509,7 @@ class NotionService:
                 "data_source_id": normalized_data_source_id,
             },
             "properties": properties,
-            "children": self._summary_blocks(summary, source_url),
+            "children": self._summary_blocks(body_summary or summary, source_url),
         }
         return self._request("POST", "/pages", json=body)
 
@@ -642,14 +643,16 @@ class NotionService:
         summary: str,
         source_url: str | None = None,
     ) -> list[dict[str, Any]]:
-        blocks = [
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": self._rich_text(chunk)},
-            }
-            for chunk in self._chunk_text(summary)
-        ]
+        blocks = []
+        for paragraph in self._paragraphs(summary):
+            blocks.extend(
+                {
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {"rich_text": self._rich_text(chunk)},
+                }
+                for chunk in self._chunk_text(paragraph)
+            )
         if source_url:
             blocks.append(
                 {
@@ -659,6 +662,16 @@ class NotionService:
                 }
             )
         return blocks
+
+    def _paragraphs(self, text: str) -> list[str]:
+        stripped = text.strip()
+        if not stripped:
+            return [""]
+        return [
+            paragraph.strip()
+            for paragraph in re.split(r"\n\s*\n+", stripped)
+            if paragraph.strip()
+        ]
 
     def _chunk_text(self, text: str) -> list[str]:
         stripped = text.strip()
