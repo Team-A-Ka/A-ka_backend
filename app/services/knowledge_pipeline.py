@@ -26,6 +26,7 @@ from app.services.transcript_chunking import chunk_by_semantic
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.smtp_service import send_search_result_email
 from app.models.notion import NotionConnection
+from app.models.knowledge import YoutubeKnowledgeChunk
 from app.services.youtube_service import YouTubeService
 from database import SessionLocal, async_session_maker
 
@@ -297,6 +298,63 @@ class KnowledgePipelineService:
             run_async(mark_failed(video_id, reason=f"Task {task_id} failed"))
         except Exception as exc:
             upload_logger.error(f"Failed to mark pipeline failure: {exc}")
+
+def answer_duplicate_embedded_question(knowledge_id: str, video_id: str, user_id: int, embedded_question: str, title: str, full_summary: str):
+    db = SessionLocal()
+    try:
+        internal_user_id = resolve_internal_user_id(db, user_id)
+        if not internal_user_id:
+            return
+        
+        user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
+        recipient_email = user_conn.owner_user_email if user_conn else None
+        
+        if recipient_email:
+            step3_logger.info(f"Generating duplicate RAG answer for embedded_question: {embedded_question}")
+            
+            chunks = db.query(YoutubeKnowledgeChunk).filter_by(knowledge_id=knowledge_id).order_by(YoutubeKnowledgeChunk.chunk_order).limit(10).all()
+            
+            context_parts = []
+            if full_summary:
+                context_parts.append(f"[전체 요약]\n{full_summary}")
+            
+            for i, chunk in enumerate(chunks):
+                content = chunk.summary_detail or chunk.content or ""
+                context_parts.append(f"[본문 일부 {i+1}]\n{content}")
+            
+            context_text = "\n\n".join(context_parts)
+            
+            llm = get_chat_model_primary()
+            response = llm.invoke([
+                SystemMessage(
+                    content=(
+                        "너는 방금 사용자가 전송한 유튜브 영상의 내용을 기반으로 답변하는 AI 어시스턴트야. "
+                        "아래 [영상 내용]은 영상의 전체 요약과 본문 일부야. "
+                        "반드시 이 내용만을 근거로 사용자의 질문에 답변한다.\n\n"
+                        "[필수 규칙]\n"
+                        "1. 없는 내용 금지: 영상 내용에 없는 내용은 절대 추측하거나 지어내지 않는다.\n"
+                        "2. 존댓말 필수: 모든 문장은 '~입니다', '~해요' 형태의 존댓말로 끝낸다.\n"
+                        "3. 간결하게: 3~5문장으로 친절하고 명확하게 답변한다."
+                    )
+                ),
+                HumanMessage(content=f"[영상 내용]\n{context_text}\n\n[질문]\n{embedded_question}")
+            ])
+            
+            answer = getattr(response, "content", "")
+            if answer:
+                url = f"https://www.youtube.com/watch?v={video_id}"
+                pseudo_chunk = {"original_url": url, "title": title}
+                send_search_result_email(
+                    recipient_email=recipient_email,
+                    query=embedded_question,
+                    answer=answer,
+                    chunks=[pseudo_chunk]
+                )
+    except Exception as e:
+        step3_logger.error(f"Duplicate embedded_question 처리 중 실패: {e}")
+    finally:
+        db.close()
+
 
 
 def save_summary_to_user_notion(
