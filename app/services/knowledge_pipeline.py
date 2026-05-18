@@ -26,10 +26,8 @@ from app.services.transcript_chunking import chunk_by_semantic
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.smtp_service import send_search_result_email
 from app.models.notion import NotionConnection
-from app.models.knowledge import YoutubeKnowledgeChunk, YoutubeMetadata
 from app.services.youtube_service import YouTubeService
 from database import SessionLocal, async_session_maker
-from sqlalchemy.orm import Session
 
 # 메서드/함수 흐름에 따라 도메인 카테고리 logger를 분리한다.
 upload_logger = logging.getLogger("aka.upload")
@@ -168,10 +166,6 @@ class KnowledgePipelineService:
             run_async(_update_chunk_embeddings(result["summarized_chunks"]))
 
         step2_logger.info(f"LangGraph completed title={result['title']}")
-        # Celery chain(JSON)에 1536차원 embedding을 넣으면 Step3 전달이 깨질 수 있어 제외한다.
-        result["summarized_chunks"] = _chunks_for_celery_chain(
-            result.get("summarized_chunks", [])
-        )
         return result
 
     def publish_pipeline_result(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -207,22 +201,15 @@ class KnowledgePipelineService:
         notion_page = None
         if user_id:
             hit_count = db_result.get("hit_count", 1) if db_result else 1
-            body_summary = resolve_body_summary_for_notion(
-                data,
-                db_result=db_result,
-            )
-            step3_logger.info(
-                "Notion body_summary built=%s len=%s chunks_in_task=%s",
-                bool(body_summary),
-                len(body_summary or ""),
-                len(data.get("summarized_chunks") or []),
-            )
             notion_page = save_summary_to_user_notion(
                 user_id=user_id,
                 video_id=video_id,
                 title=title,
                 full_summary=full_summary,
-                body_summary=body_summary,
+                body_summary=build_timestamped_summary(
+                    data.get("summarized_chunks", []),
+                    duration_ms=(data.get("metadata") or {}).get("duration"),
+                ),
                 category=resolved_category,
                 hit_count=hit_count,
             )
@@ -365,94 +352,6 @@ def save_summary_to_user_notion(
         db.close()
 
 
-def _chunks_for_celery_chain(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    slim: list[dict[str, Any]] = []
-    for chunk in chunks:
-        if not isinstance(chunk, dict):
-            continue
-        slim.append(
-            {
-                key: value
-                for key, value in chunk.items()
-                if key != "embedding"
-            }
-        )
-    return slim
-
-
-def resolve_body_summary_for_notion(
-    data: dict[str, Any],
-    *,
-    db_result: dict[str, Any] | None,
-) -> str | None:
-    duration_ms = (data.get("metadata") or {}).get("duration")
-    body_summary = build_timestamped_summary(
-        data.get("summarized_chunks", []),
-        duration_ms=duration_ms,
-    )
-    if body_summary:
-        return body_summary
-
-    knowledge_id = (db_result or {}).get("knowledge_id")
-    if knowledge_id:
-        body_summary = fetch_timestamped_body_summary_for_knowledge(str(knowledge_id))
-        if body_summary:
-            step3_logger.info(
-                "Notion body_summary loaded from DB knowledge_id=%s len=%s",
-                knowledge_id,
-                len(body_summary),
-            )
-            return body_summary
-
-    return None
-
-
-def _chunk_summary_text(chunk: dict[str, Any]) -> str:
-    return (chunk.get("summary") or chunk.get("summary_detail") or "").strip()
-
-
-def fetch_timestamped_body_summary_for_knowledge(knowledge_id: str) -> str | None:
-    db = SessionLocal()
-    try:
-        return _fetch_timestamped_body_summary_for_knowledge(db, knowledge_id)
-    finally:
-        db.close()
-
-
-def _fetch_timestamped_body_summary_for_knowledge(
-    db: Session,
-    knowledge_id: str,
-) -> str | None:
-    chunks = (
-        db.query(YoutubeKnowledgeChunk)
-        .filter(YoutubeKnowledgeChunk.knowledge_id == knowledge_id)
-        .order_by(YoutubeKnowledgeChunk.chunk_order)
-        .all()
-    )
-    if not chunks:
-        return None
-
-    duration_row = (
-        db.query(YoutubeMetadata.duration)
-        .filter(YoutubeMetadata.knowledge_id == knowledge_id)
-        .first()
-    )
-    duration_ms = duration_row[0] if duration_row else None
-    summarized_chunks = [
-        {
-            "chunk_order": chunk.chunk_order,
-            "start_time": chunk.start_time,
-            "summary": chunk.summary_detail,
-            "summary_detail": chunk.summary_detail,
-        }
-        for chunk in chunks
-    ]
-    return build_timestamped_summary(
-        summarized_chunks,
-        duration_ms=duration_ms,
-    )
-
-
 def build_timestamped_summary(
     summarized_chunks: list[dict[str, Any]],
     *,
@@ -461,7 +360,7 @@ def build_timestamped_summary(
     chunks = [
         chunk
         for chunk in summarized_chunks
-        if _chunk_summary_text(chunk)
+        if (chunk.get("summary") or "").strip()
     ]
     if not chunks:
         return None
@@ -469,7 +368,7 @@ def build_timestamped_summary(
     chunks.sort(key=lambda chunk: chunk.get("chunk_order", 0))
     parts = []
     for index, chunk in enumerate(chunks):
-        summary = _chunk_summary_text(chunk)
+        summary = (chunk.get("summary") or "").strip()
         start_ms = _safe_int(chunk.get("start_time"), default=0)
         end_ms = _timestamp_end_ms(chunks, index, start_ms, duration_ms)
         parts.append(f"[{_format_timestamp_range(start_ms, end_ms)}] {summary}")
