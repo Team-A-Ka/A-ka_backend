@@ -1,6 +1,7 @@
 import concurrent.futures
 import functools
 import logging
+import re
 import uuid
 
 from langchain_core.runnables import RunnableConfig
@@ -22,7 +23,17 @@ openai_client = get_openai_sdk_client()
 _chunk_summary_llm = get_llm()
 
 _overview_chain = None
-_MIN_FULL_SUMMARY_LENGTH = 250
+_MIN_FULL_SUMMARY_LENGTH = 120
+_MAX_FULL_SUMMARY_LENGTH = 190
+_LEGAL_ROLE_TERMS = ("피고인", "변호인", "재판부", "공소장", "증인")
+_TRIAL_CONTEXT_TERMS = (
+    "재판",
+    "법원",
+    "판사",
+    "검찰",
+    "공소장",
+    "혐의",
+)
 
 
 def _get_overview_chain():
@@ -58,10 +69,9 @@ def _build_chunk_context_block(metadata: dict | None) -> str:
 def _build_legal_role_hint(metadata: dict | None, content: str) -> str:
     metadata = metadata or {}
     video_title = metadata.get("video_title") or metadata.get("title") or ""
-    legal_role_markers = ("피고인", "변호인", "재판부", "공소장", "재판")
-    if not any(marker in content for marker in legal_role_markers):
+    if not _has_trial_context(content):
         return ""
-    if not video_title:
+    if video_title and not _has_trial_context(video_title + " " + content):
         return ""
 
     return (
@@ -70,6 +80,44 @@ def _build_legal_role_hint(metadata: dict | None, content: str) -> str:
         "본문의 '피고인' 같은 법적 지위는 생략하지 말고, 영상 제목의 핵심 인물명과 결합해 "
         "'피고인 [인물명]' 형태로 요약에 포함하라."
     )
+
+
+def _has_trial_context(text: str) -> bool:
+    return any(term in (text or "") for term in _TRIAL_CONTEXT_TERMS)
+
+
+def _remove_unfounded_legal_roles(summary: str, source_text: str) -> str:
+    if _has_trial_context(source_text):
+        return summary
+
+    cleaned = summary or ""
+    for term in _LEGAL_ROLE_TERMS:
+        cleaned = cleaned.replace(f"{term} ", "")
+        cleaned = cleaned.replace(term, "")
+    return cleaned.strip()
+
+
+def _clip_full_summary_length(summary: str) -> str:
+    text = (summary or "").strip()
+    if len(text) <= _MAX_FULL_SUMMARY_LENGTH:
+        return text
+
+    sentences = [part.strip() for part in re.split(r"(?<=[.!?。])\s+", text) if part.strip()]
+    if not sentences:
+        return text[: _MAX_FULL_SUMMARY_LENGTH - 3].rstrip() + "..."
+
+    selected: list[str] = []
+    for sentence in sentences:
+        candidate = " ".join([*selected, sentence]).strip()
+        if len(candidate) > _MAX_FULL_SUMMARY_LENGTH:
+            break
+        selected.append(sentence)
+
+    clipped = " ".join(selected).strip()
+    if len(clipped) >= _MIN_FULL_SUMMARY_LENGTH:
+        return clipped
+
+    return text[: _MAX_FULL_SUMMARY_LENGTH - 3].rstrip() + "..."
 
 
 _CHUNK_SYSTEM_PROMPT = (
@@ -101,8 +149,11 @@ def _expand_full_summary_if_needed(
     full_summary: str,
     overview_input: str,
 ) -> str:
-    if len((full_summary or "").strip()) >= _MIN_FULL_SUMMARY_LENGTH:
-        return full_summary
+    cleaned_summary = _remove_unfounded_legal_roles(full_summary, overview_input)
+    if len(cleaned_summary) > _MAX_FULL_SUMMARY_LENGTH:
+        return _clip_full_summary_length(cleaned_summary)
+    if len(cleaned_summary) >= _MIN_FULL_SUMMARY_LENGTH:
+        return cleaned_summary
 
     try:
         response = _chunk_summary_llm.invoke(
@@ -112,10 +163,10 @@ def _expand_full_summary_if_needed(
                         "너는 유튜브 영상 요약문을 상세하게 보강하는 AI다. "
                         "입력으로 제공된 영상 제목, 채널명, 청크별 요약, 초안 요약만 근거로 사용한다. "
                         "없는 사실을 추가하지 말고, 이미 있는 정보를 더 구체적이고 읽기 쉽게 확장한다. "
-                        "결과는 한국어 문단 하나로 작성하고, 3~5문장, 250~450자 분량으로 작성한다. "
+                        "결과는 한국어 문단 하나로 작성하고, 2~3문장, 120~190자 분량으로 압축한다. "
                         "사건 배경, 핵심 인물, 주요 주장, 근거, 쟁점을 압축해서 포함한다. "
-                        "재판 관련 영상이면 당사자의 법적 지위(피고인, 변호인, 증인 등)를 이름과 함께 포함한다. "
-                        "초안이나 원본 정보에 '피고인 [이름]' 표현이 있으면 첫 문장에 반드시 보존한다."
+                        "원본 정보가 재판·법원·검찰·혐의 맥락을 명시하지 않으면 "
+                        "'피고인', '변호인', '증인' 같은 법정 용어를 절대 만들지 않는다."
                     ),
                 ),
                 HumanMessage(
@@ -123,14 +174,15 @@ def _expand_full_summary_if_needed(
                         f"요약 제목: {title}\n\n"
                         f"초안 요약:\n{full_summary}\n\n"
                         f"원본 정보:\n{overview_input}\n\n"
-                        "위 정보만 바탕으로 full_summary에 들어갈 3~5문장 요약문을 다시 작성해줘."
+                        "위 정보만 바탕으로 full_summary에 들어갈 2~3문장 요약문을 다시 작성해줘."
                     )
                 ),
             ]
         )
         expanded = base_message_text(response)
         if expanded:
-            return expanded
+            cleaned = _remove_unfounded_legal_roles(expanded, overview_input)
+            return _clip_full_summary_length(cleaned)
     except Exception as exc:
         logger.warning(f"  summary expansion failed: {exc}")
 
@@ -269,12 +321,11 @@ def generate_overview(state: IntelligenceState) -> dict:
                         "title은 '윤석열 군 사망사건 수사권 주장'처럼 작성한다.\n\n"
                         "[핵심 요약 작성 규칙 — 반드시 따름]\n"
                         "- full_summary는 제목을 길게 풀어쓴 수준이 아니라, 영상을 보지 않아도 핵심 흐름을 이해할 수 있는 요약이어야 한다.\n"
-                        "- 반드시 3~5문장으로 작성하고, 가능하면 250~450자 분량으로 압축해서 작성한다.\n"
+                        "- 반드시 2~3문장으로 작성하고, 가능하면 120~190자 분량으로 압축해서 작성한다.\n"
                         "- 사건 배경, 핵심 인물, 주요 발언/주장, 근거, 쟁점을 포함하되 불필요한 반복은 제거한다.\n"
                         "- 법률, 정치, 뉴스, 재판 관련 영상이면 관련 법/제도, 사건명, 쟁점, 책임 소재를 빠뜨리지 않는다.\n"
-                        "- 재판 관련 영상이면 누가 피고인/변호인/증인인지, 어떤 사건이나 혐의 맥락에서 발언했는지 포함한다.\n"
-                        "- 청크 요약에 '피고인 윤석열 전 대통령'처럼 법적 지위와 이름이 함께 나온 경우, "
-                        "full_summary 첫 문장에 그 표현을 반드시 보존한다.\n"
+                        "- 원본 정보가 재판·법원·검찰·혐의 맥락을 명시하지 않으면 "
+                        "'피고인', '변호인', '증인' 같은 법정 용어를 만들지 않는다.\n"
                         "- 추상적인 표현만 반복하지 말고, 청크 요약에 나온 구체적 내용을 우선 반영한다.\n"
                         "- 단순히 '중요성을 강조했다', '논의가 이루어졌다'처럼 끝내지 말고 무엇을 왜 강조했는지 설명한다.\n"
                         "- 자막 오류나 중복 표현은 의미를 유지하면서 자연스럽게 정리한다. "
@@ -286,9 +337,7 @@ def generate_overview(state: IntelligenceState) -> dict:
                         "다만 법적 지위가 핵심 맥락이면 '피고인 윤석열 전 대통령'처럼 이름과 함께 쓴다.\n"
                         "- 영상 제목·채널명에 인물명/직책/사건명이 명시되어 있다면 "
                         "그것을 화자나 핵심 인물로 우선 표기한다.\n"
-                        "- 청크 요약에 '피고인' 등 일반 명칭이 남아 있으면, 영상 제목/채널명과 "
-                        "맥락을 종합해 '피고인 윤석열 전 대통령'처럼 실제 인명·직책을 붙여 최종 요약을 작성한다.\n"
-                        "- 이미 청크 요약에 '피고인 [인물명]' 형태가 있다면, 최종 요약에서 법적 지위를 삭제하지 않는다.\n"
+                        "- 청크 요약에 법정 용어가 있더라도, 재판·법원·검찰·혐의 맥락이 함께 확인될 때만 최종 요약에 반영한다.\n"
                         "- 단서가 전혀 없는 경우에 한해 '화자' 같은 중립 명칭을 최소한으로 쓴다. "
                         "법적 지위는 근거가 있을 때만 이름과 함께 쓴다.\n\n"
                         "요약은 Notion 페이지에 게시할 예정이므로 깔끔하고 읽기 쉽게 작성한다. "
@@ -303,6 +352,10 @@ def generate_overview(state: IntelligenceState) -> dict:
         title = overview.title
         full_summary = overview.full_summary
         category = overview.category
+        full_summary = _remove_unfounded_legal_roles(
+            full_summary,
+            overview_input,
+        )
         full_summary = _expand_full_summary_if_needed(
             title=title,
             full_summary=full_summary,
