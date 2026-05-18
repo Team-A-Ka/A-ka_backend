@@ -31,12 +31,12 @@ class ChatCommandService:
     def process(self, user_id: int, user_message: str) -> dict:
         logger.info(f"====== [AI Router] 의도 분석 시작 (User: {user_id}) ======")
         logger.info(f"입력된 텍스트: {user_message}")
-        intent, detected_url = self.analyze_intent(user_message)
+        intent, detected_url, embedded_question = self.analyze_intent(user_message)
 
         if intent == IntentType.FIND_SIMILAR:
-            return self.handle_find_similar(user_id, detected_url)
+            return self.handle_find_similar(user_id, detected_url, embedded_question)
         if intent == IntentType.UPLOAD:
-            return self.handle_upload(user_id, detected_url)
+            return self.handle_upload(user_id, detected_url, embedded_question)
         if intent == IntentType.SAVE_ONLY:
             return self.handle_save_only(user_id, detected_url)
         if intent == IntentType.SEARCH:
@@ -48,9 +48,10 @@ class ChatCommandService:
             "user_id": user_id,
         }
 
-    def analyze_intent(self, user_message: str) -> tuple[IntentType, str | None]:
+    def analyze_intent(self, user_message: str) -> tuple[IntentType, str | None, str | None]:
         intent = IntentType.UNKNOWN
         detected_url = None
+        embedded_question = None
         last_error: Exception | None = None
         parsed_successfully = False
 
@@ -100,7 +101,10 @@ class ChatCommandService:
                                 "'요약해줘'가 있으면 UPLOAD, '저장만 해줘'가 있으면 SAVE_ONLY.\n\n"
                                 "[URL 추출 규칙]\n"
                                 "유효한 유튜브 URL이 여러 개면 첫 번째 URL만 detected_url로 추출한다. "
-                                "유효한 유튜브 URL(video_id 11자리 포함)만 detected_url에 추출한다."
+                                "유효한 유튜브 URL(video_id 11자리 포함)만 detected_url에 추출한다.\n\n"
+                                "[질문 추출 규칙]\n"
+                                "URL 외에 영상 내용에 대한 구체적인 질문(예: '핵심 내용 뭐야?', '결론은?', '몇 분쯤 X 얘기해?')이 함께 있으면 embedded_question으로 추출한다. "
+                                "단순 인사나 감탄, 저장 지시(예: '재밌어 보이지?', '저장해둬', '이거 봐봐')는 추출하지 않는다."
                             ),
                         ),
                         HumanMessage(content=user_message),
@@ -112,8 +116,9 @@ class ChatCommandService:
                 if parsed_result:
                     intent = parsed_result.intent
                     detected_url = parsed_result.detected_url
+                    embedded_question = parsed_result.embedded_question
                     logger.info(
-                        f"[AI Router] intent={intent.value}, detected_url={detected_url}"
+                        f"[AI Router] intent={intent.value}, detected_url={detected_url}, embedded_question={embedded_question}"
                     )
                 break
             except Exception as exc:
@@ -125,9 +130,9 @@ class ChatCommandService:
         if last_error is not None and not parsed_successfully:
             raise RuntimeError("Failed to analyze user intent") from last_error
 
-        return intent, detected_url
+        return intent, detected_url, embedded_question
 
-    def handle_upload(self, user_id: int, detected_url: str | None) -> dict:
+    def handle_upload(self, user_id: int, detected_url: str | None, embedded_question: str | None = None) -> dict:
         video_id = self.parse_youtube_video_id(detected_url)
         if not video_id:
             return {
@@ -137,7 +142,7 @@ class ChatCommandService:
             }
 
         result = run_core_pipeline_task(
-            detected_url, video_id, user_id, include_similar=False
+            detected_url, video_id, user_id, include_similar=False, embedded_question=embedded_question
         )
         return {
             "intent": IntentType.UPLOAD.value,
@@ -168,7 +173,7 @@ class ChatCommandService:
             "status": "QUEUED",
         }
 
-    def handle_find_similar(self, user_id: int, detected_url: str | None) -> dict:
+    def handle_find_similar(self, user_id: int, detected_url: str | None, embedded_question: str | None = None) -> dict:
         """FIND_SIMILAR: UPLOAD 파이프라인 트리거 후 Step 3에서 유사 영상 자동 검색.
 
         - 새 영상: 파이프라인 완료 후 Step 3에서 find_similar_videos() 자동 실행
@@ -185,7 +190,7 @@ class ChatCommandService:
             }
 
         result = run_core_pipeline_task(
-            detected_url, video_id, user_id, include_similar=True
+            detected_url, video_id, user_id, include_similar=True, embedded_question=embedded_question
         )
 
         # 중복 영상은 파이프라인이 스킵되므로 유사 영상 검색을 직접 실행

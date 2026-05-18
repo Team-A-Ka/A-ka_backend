@@ -25,8 +25,8 @@ youtube_service = YouTubeService()
 # Step 1: 수집 + 청킹
 # ==========================================
 @celery_app.task(bind=True, name="knowledge.collect_and_chunk")
-def collect_and_chunk_task(self, video_id: str, user_id: int, include_similar: bool = False):
-    return knowledge_pipeline_service.collect_and_chunk(video_id, user_id, include_similar)
+def collect_and_chunk_task(self, video_id: str, user_id: int, include_similar: bool = False, embedded_question: str | None = None):
+    return knowledge_pipeline_service.collect_and_chunk(video_id, user_id, include_similar, embedded_question)
 
 
 # ==========================================
@@ -103,6 +103,7 @@ def run_core_pipeline_task(
     video_id: str,
     user_id: int,
     include_similar: bool = False,
+    embedded_question: str | None = None,
 ):
     """
     실행 순서 (순차 chain):
@@ -137,7 +138,7 @@ def run_core_pipeline_task(
                     )
                     # 기존 레코드 재사용 (create_base 스킵) — 파이프라인에 knowledge_id 전달
                     workflow = chain(
-                        collect_and_chunk_task.s(video_id, user_id, include_similar),
+                        collect_and_chunk_task.s(video_id, user_id, include_similar, embedded_question),
                         run_intelligence_graph_task.s(),
                         update_pipeline_status_task.s(),
                     ).on_error(handle_pipeline_failure_task.s(video_id, user_id))
@@ -209,7 +210,7 @@ def run_core_pipeline_task(
         return "Failed to start pipeline: DB Error"
 
     workflow = chain(
-        collect_and_chunk_task.s(video_id, user_id, include_similar),
+        collect_and_chunk_task.s(video_id, user_id, include_similar, embedded_question),
         run_intelligence_graph_task.s(),
         update_pipeline_status_task.s(),
     ).on_error(handle_pipeline_failure_task.s(video_id, user_id))

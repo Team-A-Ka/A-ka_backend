@@ -17,3 +17,7 @@ class IntentExtraction(BaseModel):
     detected_url: str | None = Field(
         description="사용자 발화에 포함된 URL. 없으면 null"
     )
+    embedded_question: str | None = Field(
+        default=None,
+        description="URL과 함께 포함된 영상 내용에 대한 명시적인 질문. 단순 인사나 감탄사는 제외."
+    )
