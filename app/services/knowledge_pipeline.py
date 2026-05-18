@@ -226,6 +226,23 @@ class KnowledgePipelineService:
                         summary=full_summary,
                         current_knowledge_id=current_knowledge_id,
                     )
+                    if similar_videos:
+                        db = SessionLocal()
+                        try:
+                            internal_user_id = resolve_internal_user_id(db, user_id)
+                            if internal_user_id:
+                                user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
+                                recipient_email = user_conn.owner_user_email if user_conn else None
+                                if recipient_email:
+                                    step3_logger.info("Sending similar videos email via SMTP")
+                                    send_search_result_email(
+                                        recipient_email=recipient_email,
+                                        query="요청하신 영상과 비슷한 영상 찾기",
+                                        answer="분석된 요약을 바탕으로 가장 유사한 주제를 다루는 영상들을 찾았습니다.",
+                                        chunks=similar_videos,
+                                    )
+                        finally:
+                            db.close()
                 except Exception as e:
                     step3_logger.warning(f"유사 영상 검색 실패 (파이프라인 영향 없음): {e}")
 

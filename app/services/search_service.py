@@ -330,7 +330,7 @@ def find_similar_videos(
     for i, v in enumerate(top, 1):
         similar_logger.debug(f"  [{i}] distance={v['distance']:.4f} | {v['title']}")
 
-    return [{"title": v["title"], "url": v["url"]} for v in top]
+    return [{"title": v["title"], "original_url": v["url"]} for v in top]
 
 
 # ==========================================

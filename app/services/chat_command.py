@@ -210,6 +210,28 @@ class ChatCommandService:
                     logger.info(
                         f"[FIND_SIMILAR] 중복 영상 유사 검색 완료: {len(similar_videos)}개"
                     )
+                    
+                    if similar_videos:
+                        from app.models.notion import NotionConnection
+                        from app.services.notion_connection_service import resolve_internal_user_id
+                        from app.services.smtp_service import send_search_result_email
+                        
+                        db = SessionLocal()
+                        try:
+                            internal_user_id = resolve_internal_user_id(db, user_id)
+                            if internal_user_id:
+                                user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
+                                recipient_email = user_conn.owner_user_email if user_conn else None
+                                if recipient_email:
+                                    logger.info("[FIND_SIMILAR] 유사 영상 결과 SMTP 메일 발송")
+                                    send_search_result_email(
+                                        recipient_email=recipient_email,
+                                        query="요청하신 영상과 비슷한 영상 찾기",
+                                        answer="분석된 요약을 바탕으로 가장 유사한 주제를 다루는 영상들을 찾았습니다.",
+                                        chunks=similar_videos,
+                                    )
+                        finally:
+                            db.close()
                 except Exception as e:
                     logger.warning(f"[FIND_SIMILAR] 유사 영상 검색 실패: {e}")
 
