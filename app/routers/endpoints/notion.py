@@ -35,7 +35,7 @@ from database import get_db
 
 router = APIRouter()
 notion_service = NotionService()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("aka.notion")
 
 
 @router.get("/oauth/start", response_model=NotionOAuthStartResponse)

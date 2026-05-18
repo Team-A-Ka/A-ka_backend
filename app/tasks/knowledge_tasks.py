@@ -45,12 +45,17 @@ def run_intelligence_graph_task(self, data: dict):
 def update_pipeline_status_task(self, data: dict):
     return knowledge_pipeline_service.publish_pipeline_result(data)
 
+@shared_task(bind=True, name="knowledge.answer_duplicate_embedded_question")
+def answer_duplicate_embedded_question_task(self, knowledge_id: str, video_id: str, user_id: int, embedded_question: str, title: str, full_summary: str):
+    from app.services.knowledge_pipeline import answer_duplicate_embedded_question
+    answer_duplicate_embedded_question(knowledge_id, video_id, user_id, embedded_question, title, full_summary)
+
 
 # ==========================================
 # 에러 핸들러
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
-def handle_pipeline_failure_task(self, request, exc, traceback, video_id: str, user_id: int):
+def handle_pipeline_failure_task(self, video_id: str, user_id: int, request, exc, traceback):
     task_id = getattr(request, "id", None) or str(request)
     result = knowledge_pipeline_service.handle_failure(video_id, task_id)
     send_user_processing_error_email(
@@ -178,6 +183,17 @@ def run_core_pipeline_task(
                         else "duplicate_saved_to_notion"
                     )
                 response["notion_page"] = notion_page
+
+                # RAG 답변 처리 (embedded_question) - 중복 영상인 경우
+                if embedded_question:
+                    answer_duplicate_embedded_question_task.delay(
+                        duplicate_result["knowledge_id"],
+                        video_id,
+                        user_id,
+                        embedded_question,
+                        duplicate_result.get("title") or f"YouTube summary {video_id}",
+                        duplicate_result.get("summary") or "Summary is empty."
+                    )
 
             return response
                 

@@ -17,6 +17,7 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.notion_connection_service import (
     create_summary_page_for_user,
     resolve_internal_user_id,
+    resolve_recipient_email,
 )
 from app.services.notion_service import NotionServiceError
 from app.services.search_service import find_similar_videos
@@ -26,6 +27,7 @@ from app.services.transcript_chunking import chunk_by_semantic
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.smtp_service import send_search_result_email
 from app.models.notion import NotionConnection
+from app.models.knowledge import YoutubeKnowledgeChunk
 from app.services.youtube_service import YouTubeService
 from database import SessionLocal, async_session_maker
 
@@ -219,38 +221,69 @@ class KnowledgePipelineService:
         if include_similar and user_id and db_result:
             current_knowledge_id = db_result.get("knowledge_id")
             if current_knowledge_id:
+                # 수신자 사전 조회 — 0건 결과/예외 모두 알림 발송에 사용
+                recipient_email = resolve_recipient_email(user_id)
                 try:
                     similar_videos = find_similar_videos(
                         user_id=int(user_id),
                         summary=full_summary,
                         current_knowledge_id=current_knowledge_id,
                     )
+                    if recipient_email:
+                        if similar_videos:
+                            step3_logger.info("Sending similar videos email via SMTP")
+                            send_search_result_email(
+                                recipient_email=recipient_email,
+                                query="요청하신 영상과 비슷한 영상 찾기",
+                                answer="분석된 요약을 바탕으로 가장 유사한 주제를 다루는 영상들을 찾았습니다.",
+                                chunks=similar_videos,
+                            )
+                        else:
+                            step3_logger.info("유사 영상 0건 — 안내 메일 발송")
+                            send_search_result_email(
+                                recipient_email=recipient_email,
+                                query="요청하신 영상과 비슷한 영상 찾기",
+                                answer="저장된 영상 중 유사한 주제를 다루는 영상을 찾지 못했어요.",
+                                chunks=[],
+                            )
                 except Exception as e:
                     step3_logger.warning(f"유사 영상 검색 실패 (파이프라인 영향 없음): {e}")
+                    if recipient_email:
+                        send_search_result_email(
+                            recipient_email=recipient_email,
+                            query="비슷한 영상 찾기",
+                            answer="유사 영상 검색 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.",
+                            chunks=[],
+                        )
 
         # RAG 답변 처리 (embedded_question)
-        if embedded_question and user_id and db_result:
+        if (
+            embedded_question
+            and user_id
+            and db_result
+            and db_result.get("knowledge_id")
+        ):
             try:
-                db = SessionLocal()
-                internal_user_id = resolve_internal_user_id(db, user_id)
-                if internal_user_id:
-                    user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
-                    recipient_email = user_conn.owner_user_email if user_conn else None
+                recipient_email = resolve_recipient_email(user_id)
+                if recipient_email:
+                    step3_logger.info(f"Generating RAG answer for embedded_question: {embedded_question}")
+                    chunks_data = data.get("chunks", [])
+                    context_parts = []
+                    if full_summary:
+                        context_parts.append(f"[전체 요약]\n{full_summary}")
 
-                    if recipient_email:
-                        step3_logger.info(f"Generating RAG answer for embedded_question: {embedded_question}")
-                        chunks_data = data.get("chunks", [])
-                        # Chunks to format for the RAG LLM
-                        context_parts = []
-                        if full_summary:
-                            context_parts.append(f"[전체 요약]\n{full_summary}")
-                        
-                        for i, chunk in enumerate(chunks_data[:10]):  # 앞쪽 청크 위주로 제한
-                            content = chunk.get("summary_detail") or chunk.get("content", "")
-                            context_parts.append(f"[본문 일부 {i+1}]\n{content}")
-                        
-                        context_text = "\n\n".join(context_parts)
-                        
+                    for i, chunk in enumerate(chunks_data[:10]):  # 앞쪽 청크 위주로 제한
+                        content = chunk.get("summary_detail") or chunk.get("content", "")
+                        context_parts.append(f"[본문 일부 {i+1}]\n{content}")
+
+                    context_text = "\n\n".join(context_parts)
+
+                    # 정상 흐름에선 항상 채워지지만, 비어있으면 LLM 환각 위험이 있으므로 방어
+                    if not context_text.strip():
+                        step3_logger.warning(
+                            "embedded_question RAG context 비어있음 — LLM 호출 스킵"
+                        )
+                    else:
                         llm = get_chat_model_primary()
                         response = llm.invoke([
                             SystemMessage(
@@ -266,7 +299,7 @@ class KnowledgePipelineService:
                             ),
                             HumanMessage(content=f"[영상 내용]\n{context_text}\n\n[질문]\n{embedded_question}")
                         ])
-                        
+
                         answer = getattr(response, "content", "")
                         if answer:
                             url = f"https://www.youtube.com/watch?v={video_id}"
@@ -297,6 +330,63 @@ class KnowledgePipelineService:
             run_async(mark_failed(video_id, reason=f"Task {task_id} failed"))
         except Exception as exc:
             upload_logger.error(f"Failed to mark pipeline failure: {exc}")
+
+def answer_duplicate_embedded_question(knowledge_id: str, video_id: str, user_id: int, embedded_question: str, title: str, full_summary: str):
+    db = SessionLocal()
+    try:
+        internal_user_id = resolve_internal_user_id(db, user_id)
+        if not internal_user_id:
+            return
+        
+        user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
+        recipient_email = user_conn.owner_user_email if user_conn else None
+        
+        if recipient_email:
+            step3_logger.info(f"Generating duplicate RAG answer for embedded_question: {embedded_question}")
+            
+            chunks = db.query(YoutubeKnowledgeChunk).filter_by(knowledge_id=knowledge_id).order_by(YoutubeKnowledgeChunk.chunk_order).limit(10).all()
+            
+            context_parts = []
+            if full_summary:
+                context_parts.append(f"[전체 요약]\n{full_summary}")
+            
+            for i, chunk in enumerate(chunks):
+                content = chunk.summary_detail or chunk.content or ""
+                context_parts.append(f"[본문 일부 {i+1}]\n{content}")
+            
+            context_text = "\n\n".join(context_parts)
+            
+            llm = get_chat_model_primary()
+            response = llm.invoke([
+                SystemMessage(
+                    content=(
+                        "너는 방금 사용자가 전송한 유튜브 영상의 내용을 기반으로 답변하는 AI 어시스턴트야. "
+                        "아래 [영상 내용]은 영상의 전체 요약과 본문 일부야. "
+                        "반드시 이 내용만을 근거로 사용자의 질문에 답변한다.\n\n"
+                        "[필수 규칙]\n"
+                        "1. 없는 내용 금지: 영상 내용에 없는 내용은 절대 추측하거나 지어내지 않는다.\n"
+                        "2. 존댓말 필수: 모든 문장은 '~입니다', '~해요' 형태의 존댓말로 끝낸다.\n"
+                        "3. 간결하게: 3~5문장으로 친절하고 명확하게 답변한다."
+                    )
+                ),
+                HumanMessage(content=f"[영상 내용]\n{context_text}\n\n[질문]\n{embedded_question}")
+            ])
+            
+            answer = getattr(response, "content", "")
+            if answer:
+                url = f"https://www.youtube.com/watch?v={video_id}"
+                pseudo_chunk = {"original_url": url, "title": title}
+                send_search_result_email(
+                    recipient_email=recipient_email,
+                    query=embedded_question,
+                    answer=answer,
+                    chunks=[pseudo_chunk]
+                )
+    except Exception as e:
+        step3_logger.error(f"Duplicate embedded_question 처리 중 실패: {e}")
+    finally:
+        db.close()
+
 
 
 def save_summary_to_user_notion(
