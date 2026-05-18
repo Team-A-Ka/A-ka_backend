@@ -3,7 +3,6 @@ import logging
 from typing import Any
 
 
-from app.models.knowledge import ProcessStatus
 from app.repositories.knowledge import (
     KnowledgeRepository,
     _update_chunk_embeddings,
@@ -21,7 +20,7 @@ from app.services.notion_connection_service import (
 )
 from app.services.notion_service import NotionServiceError
 from app.services.search_service import find_similar_videos
-from app.services.transcript_chunking import chunk_by_time
+from app.services.transcript_chunking import chunk_by_semantic
 from app.services.transcript_refine import refine_transcript_segments
 from app.services.youtube_service import YouTubeService
 from database import SessionLocal, async_session_maker
@@ -32,6 +31,10 @@ step1_logger = logging.getLogger("aka.upload.step1")
 step2_logger = logging.getLogger("aka.upload.step2")
 step3_logger = logging.getLogger("aka.upload.step3")
 notion_logger = logging.getLogger("aka.notion")
+
+SEMANTIC_CHUNK_THRESHOLD = 0.35
+SEMANTIC_MIN_PARAGRAPH_CHARS = 150
+SEMANTIC_MIN_CHUNK_CHARS = 0
 
 
 def run_async(coro):
@@ -82,7 +85,12 @@ class KnowledgePipelineService:
                 "include_similar": include_similar,
             }
 
-        chunks = chunk_by_time(refined_segments, 60000)
+        chunks = chunk_by_semantic(
+            refined_segments,
+            similarity_threshold=SEMANTIC_CHUNK_THRESHOLD,
+            min_paragraph_chars=SEMANTIC_MIN_PARAGRAPH_CHARS,
+            min_chunk_chars=SEMANTIC_MIN_CHUNK_CHARS,
+        )
         step1_logger.info(f"Created {len(chunks)} chunks")
 
         final_chunks = [
@@ -188,6 +196,10 @@ class KnowledgePipelineService:
                 video_id=video_id,
                 title=title,
                 full_summary=full_summary,
+                body_summary=build_timestamped_summary(
+                    data.get("summarized_chunks", []),
+                    duration_ms=(data.get("metadata") or {}).get("duration"),
+                ),
                 category=resolved_category,
                 hit_count=hit_count,
             )
@@ -230,6 +242,7 @@ def save_summary_to_user_notion(
     video_id: str,
     title: str,
     full_summary: str,
+    body_summary: str | None = None,
     category: str | None = None,
     hit_count: int | None = 1,
 ) -> dict[str, Any] | None:
@@ -245,6 +258,7 @@ def save_summary_to_user_notion(
             user_id=internal_user_id,
             title=title or f"YouTube summary {video_id}",
             summary=full_summary or "Summary is empty.",
+            body_summary=body_summary,
             source_url=f"https://www.youtube.com/watch?v={video_id}",
             category=category,
             hit_count=hit_count,
@@ -274,6 +288,70 @@ def save_summary_to_user_notion(
         return None
     finally:
         db.close()
+
+
+def build_timestamped_summary(
+    summarized_chunks: list[dict[str, Any]],
+    *,
+    duration_ms: int | None = None,
+) -> str | None:
+    chunks = [
+        chunk
+        for chunk in summarized_chunks
+        if (chunk.get("summary") or "").strip()
+    ]
+    if not chunks:
+        return None
+
+    chunks.sort(key=lambda chunk: chunk.get("chunk_order", 0))
+    parts = []
+    for index, chunk in enumerate(chunks):
+        summary = (chunk.get("summary") or "").strip()
+        start_ms = _safe_int(chunk.get("start_time"), default=0)
+        end_ms = _timestamp_end_ms(chunks, index, start_ms, duration_ms)
+        parts.append(f"[{_format_timestamp_range(start_ms, end_ms)}] {summary}")
+
+    return "\n\n".join(parts)
+
+
+def _timestamp_end_ms(
+    chunks: list[dict[str, Any]],
+    index: int,
+    start_ms: int,
+    duration_ms: int | None,
+) -> int | None:
+    if index + 1 < len(chunks):
+        next_start = _safe_int(chunks[index + 1].get("start_time"), default=0)
+        if next_start > start_ms:
+            return next_start
+
+    duration = _safe_int(duration_ms, default=0)
+    if duration > start_ms:
+        return duration
+    return None
+
+
+def _format_timestamp_range(start_ms: int, end_ms: int | None) -> str:
+    start = _format_timestamp(start_ms)
+    if end_ms is None:
+        return start
+    return f"{start}~{_format_timestamp(end_ms)}"
+
+
+def _format_timestamp(ms: int) -> str:
+    total_seconds = max(ms, 0) // 1000
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def _safe_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 async def check_duplicate_hit_count(video_id: str, user_id: int):

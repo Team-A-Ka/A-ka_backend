@@ -1,5 +1,7 @@
 import logging
+import re
 from typing import Annotated
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy.orm import Session
@@ -22,6 +24,13 @@ logger = logging.getLogger("aka.webhook")
 
 router = APIRouter()
 
+YOUTUBE_URL_PATTERN = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s]+",
+    re.IGNORECASE,
+)
+KAKAO_ACK_TEXT = "서버 연결 성공! 요청하신 내용을 확인했습니다."
+KAKAO_SHORTS_ACK_TEXT = "쇼츠 링크 확인했습니다. 요약 없이 Notion에 저장해드릴게요."
+
 
 def trigger_ai_router(user_id: int, user_message: str):
     """Celery 큐에 밀어넣는 작업 자체도 백그라운드에서 처리하여 5초 응답을 완벽히 보장합니다."""
@@ -29,6 +38,22 @@ def trigger_ai_router(user_id: int, user_message: str):
         process_ai_routing_task.delay(user_id, user_message)
     except Exception as e:
         logger.warning(f"⚠️ [경고] 워커 큐(Redis) 전송 실패. 백그라운드 작업이 지연됩니다: {e}")
+
+
+def _is_youtube_shorts_message(user_message: str) -> bool:
+    for match in YOUTUBE_URL_PATTERN.finditer(user_message):
+        url = match.group(0).rstrip(".,;!?)）]")
+        parsed = urlparse(url if url.startswith(("http://", "https://")) else f"https://{url}")
+        if parsed.netloc.lower() in {"www.youtube.com", "youtube.com", "m.youtube.com"}:
+            if parsed.path.startswith("/shorts/"):
+                return True
+    return False
+
+
+def _kakao_ack_text(user_message: str) -> str:
+    if _is_youtube_shorts_message(user_message):
+        return KAKAO_SHORTS_ACK_TEXT
+    return KAKAO_ACK_TEXT
 
 
 @router.post("/chat")
@@ -65,7 +90,7 @@ async def kakao_webhook(
 
     internal_user_id = user.id
 
-    logger.info(f"========== [카카오 웹훅 수신] ==========")
+    logger.info("========== [카카오 웹훅 수신] ==========")
     logger.info(f"Kakao User ID: {kakao_user_id}")
     logger.info(f"Internal User ID: {internal_user_id}")
     logger.info(f"Message: {user_message}")
@@ -79,7 +104,7 @@ async def kakao_webhook(
             outputs=[
                 Output(
                     simpleText=SimpleText(
-                        text="서버 연결 성공! 요청하신 내용을 확인했습니다."
+                        text=_kakao_ack_text(user_message)
                     )
                 )
             ]
