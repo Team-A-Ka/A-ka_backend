@@ -55,7 +55,7 @@ def answer_duplicate_embedded_question_task(self, knowledge_id: str, video_id: s
 # 에러 핸들러
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
-def handle_pipeline_failure_task(self, request, exc, traceback, video_id: str, user_id: int):
+def handle_pipeline_failure_task(self, video_id: str, user_id: int, request, exc, traceback):
     task_id = getattr(request, "id", None) or str(request)
     result = knowledge_pipeline_service.handle_failure(video_id, task_id)
     send_user_processing_error_email(
