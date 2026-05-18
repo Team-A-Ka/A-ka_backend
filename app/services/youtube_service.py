@@ -13,7 +13,7 @@ from yt_dlp import YoutubeDL
 from ..core.config import settings
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("aka.youtube")
 
 
 class YouTubeService:

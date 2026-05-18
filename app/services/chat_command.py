@@ -10,7 +10,6 @@ from app.schemas.intent import IntentExtraction, IntentType
 from app.services.search_service import find_similar_videos, search_and_answer
 from app.tasks.knowledge_tasks import run_core_pipeline_task, save_link_only_task
 from app.services.smtp_service import send_search_result_email
-from app.models.notion import NotionConnection
 from database import SessionLocal
 
 logger = logging.getLogger("aka.intent")
@@ -193,47 +192,66 @@ class ChatCommandService:
             detected_url, video_id, user_id, include_similar=True, embedded_question=embedded_question
         )
 
-        # 중복 영상은 파이프라인이 스킵되므로 유사 영상 검색을 직접 실행
+        # 중복 영상은 파이프라인이 스킵되므로 유사 영상 검색을 직접 실행.
+        # summary 유무에 따라 (1) 정상 검색, (2) SAVE_ONLY 안내, (3) 에러 안내로 분기.
         similar_videos = []
         if isinstance(result, dict) and result.get("duplicate"):
             knowledge_id = result.get("knowledge_id")
-            summary = (
-                self._get_knowledge_summary(knowledge_id) if knowledge_id else None
-            )
-            if summary:
-                try:
-                    similar_videos = find_similar_videos(
-                        user_id=user_id,
-                        summary=summary,
-                        current_knowledge_id=knowledge_id,
-                    )
-                    logger.info(
-                        f"[FIND_SIMILAR] 중복 영상 유사 검색 완료: {len(similar_videos)}개"
-                    )
-                    
-                    if similar_videos:
-                        from app.models.notion import NotionConnection
-                        from app.services.notion_connection_service import resolve_internal_user_id
-                        from app.services.smtp_service import send_search_result_email
-                        
-                        db = SessionLocal()
-                        try:
-                            internal_user_id = resolve_internal_user_id(db, user_id)
-                            if internal_user_id:
-                                user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
-                                recipient_email = user_conn.owner_user_email if user_conn else None
-                                if recipient_email:
-                                    logger.info("[FIND_SIMILAR] 유사 영상 결과 SMTP 메일 발송")
-                                    send_search_result_email(
-                                        recipient_email=recipient_email,
-                                        query="요청하신 영상과 비슷한 영상 찾기",
-                                        answer="분석된 요약을 바탕으로 가장 유사한 주제를 다루는 영상들을 찾았습니다.",
-                                        chunks=similar_videos,
-                                    )
-                        finally:
-                            db.close()
-                except Exception as e:
-                    logger.warning(f"[FIND_SIMILAR] 유사 영상 검색 실패: {e}")
+            if knowledge_id:
+                summary, summary_status = self._fetch_knowledge_summary(knowledge_id)
+                recipient_email = self._resolve_recipient_email(user_id)
+
+                if summary_status == "ok":
+                    try:
+                        similar_videos = find_similar_videos(
+                            user_id=user_id,
+                            summary=summary,
+                            current_knowledge_id=knowledge_id,
+                        )
+                        logger.info(
+                            f"[FIND_SIMILAR] 중복 영상 유사 검색 완료: {len(similar_videos)}개"
+                        )
+                        if recipient_email:
+                            if similar_videos:
+                                send_search_result_email(
+                                    recipient_email=recipient_email,
+                                    query="요청하신 영상과 비슷한 영상 찾기",
+                                    answer="분석된 요약을 바탕으로 가장 유사한 주제를 다루는 영상들을 찾았습니다.",
+                                    chunks=similar_videos,
+                                )
+                            else:
+                                send_search_result_email(
+                                    recipient_email=recipient_email,
+                                    query="요청하신 영상과 비슷한 영상 찾기",
+                                    answer="저장된 영상 중 유사한 주제를 다루는 영상을 찾지 못했어요.",
+                                    chunks=[],
+                                )
+                    except Exception as e:
+                        logger.warning(f"[FIND_SIMILAR] 유사 영상 검색 실패: {e}")
+                        if recipient_email:
+                            send_search_result_email(
+                                recipient_email=recipient_email,
+                                query="비슷한 영상 찾기",
+                                answer="유사 영상 검색 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.",
+                                chunks=[],
+                            )
+                elif summary_status == "no_summary":
+                    logger.info("[FIND_SIMILAR] summary 없음 (SAVE_ONLY 추정) — 안내 메일 발송")
+                    if recipient_email:
+                        send_search_result_email(
+                            recipient_email=recipient_email,
+                            query="비슷한 영상 찾기",
+                            answer="이 영상은 링크만 저장되어 있어 유사 검색에 필요한 분석 데이터가 없어요. 먼저 해당 영상을 요약해주세요.",
+                            chunks=[],
+                        )
+                else:  # "error"
+                    if recipient_email:
+                        send_search_result_email(
+                            recipient_email=recipient_email,
+                            query="비슷한 영상 찾기",
+                            answer="요청 처리 중 일시적인 오류가 발생했어요. 잠시 후 다시 시도해주세요.",
+                            chunks=[],
+                        )
 
         return {
             "intent": IntentType.FIND_SIMILAR.value,
@@ -245,9 +263,22 @@ class ChatCommandService:
         }
 
     @staticmethod
-    def _get_knowledge_summary(knowledge_id: str) -> str | None:
-        """knowledge_id로 summary 조회"""
-        from database import SessionLocal
+    def _resolve_recipient_email(user_id: int) -> str | None:
+        """공통 헬퍼 위임 — notion_connection_service.resolve_recipient_email."""
+        from app.services.notion_connection_service import resolve_recipient_email
+
+        return resolve_recipient_email(user_id)
+
+    @staticmethod
+    def _fetch_knowledge_summary(knowledge_id: str) -> tuple[str | None, str]:
+        """knowledge_id로 summary 조회.
+
+        Returns:
+            (summary, status) where status ∈ {"ok", "no_summary", "error"}.
+            - "ok": summary 존재 → 유사 검색 진행 가능
+            - "no_summary": row 존재하나 summary 비어있음 (SAVE_ONLY 등) → 사용자 안내 필요
+            - "error": DB 예외 → 에러 메일 발송 필요
+        """
         from sqlalchemy import text as sql_text
 
         db = SessionLocal()
@@ -256,10 +287,12 @@ class ChatCommandService:
                 sql_text("SELECT summary FROM knowledge WHERE id = CAST(:kid AS uuid)"),
                 {"kid": knowledge_id},
             ).fetchone()
-            return row[0] if row and row[0] else None
+            if row and row[0]:
+                return row[0], "ok"
+            return None, "no_summary"
         except Exception as e:
             logger.warning(f"[FIND_SIMILAR] summary 조회 실패: {e}")
-            return None
+            return None, "error"
         finally:
             db.close()
 
@@ -270,40 +303,47 @@ class ChatCommandService:
     ) -> dict:
         logger.info("➔ SEARCH 의도 감지. RAG 검색 파이프라인 실행")
 
-        search_result = search_and_answer(user_id, user_message)
+        recipient_email = self._resolve_recipient_email(user_id)
 
-        session = SessionLocal()
+        # 검색 자체가 실패하면 사용자에게 에러 메일 발송
         try:
-            # notion_connection 테이블에서 해당 사용자의 정보를 가져오기
-            conn = session.query(NotionConnection).filter_by(user_id=user_id).first()
-
-            # 이메일 정보 있는지 확인
-            if conn and conn.owner_user_email:
-                recipient_email = conn.owner_user_email
-
-                # 3. 이메일 발송
+            search_result = search_and_answer(user_id, user_message)
+        except Exception as e:
+            logger.error(f"SEARCH 파이프라인 실패: {e}")
+            if recipient_email:
                 send_search_result_email(
                     recipient_email=recipient_email,
                     query=user_message,
-                    answer=search_result["answer"],
-                    chunks=search_result.get("chunks", []),
+                    answer="검색 처리 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.",
+                    chunks=[],
                 )
-                logger.info(f"노션 연동 메일({recipient_email})로 검색 결과 전송 완료")
-            else:
-                logger.warning(
-                    f"사용자 {user_id}의 NotionConnection 정보나 이메일이 없습니다."
-                )
+            return {
+                "intent": IntentType.SEARCH.value,
+                "user_id": user_id,
+                "error": "search pipeline failed",
+            }
 
-        except Exception as e:
-            logger.error(f"노션 이메일 조회 및 발송 중 오류: {e}")
-        finally:
-            session.close()
+        sources = search_result.get("sources", 0)
+        if recipient_email:
+            if sources == 0:
+                logger.info(f"SEARCH 결과 0건 — 안내 메일 발송 ({recipient_email})")
+            send_search_result_email(
+                recipient_email=recipient_email,
+                query=user_message,
+                answer=search_result["answer"],
+                chunks=search_result.get("chunks", []),
+            )
+            logger.info(f"노션 연동 메일({recipient_email})로 검색 결과 전송 완료")
+        else:
+            logger.warning(
+                f"사용자 {user_id}의 NotionConnection 정보나 이메일이 없습니다 — SEARCH 결과 미발송"
+            )
 
         return {
             "intent": IntentType.SEARCH.value,
             "user_id": user_id,
             "result": search_result["answer"],
-            "sources": search_result.get("sources", 0),
+            "sources": sources,
         }
 
     @staticmethod

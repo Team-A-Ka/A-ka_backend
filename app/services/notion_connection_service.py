@@ -10,7 +10,7 @@ from app.services.auth_service import get_user_by_user_name
 from app.services.notion_service import NotionService, NotionServiceError
 from app.services.user_notification_service import normalize_email
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("aka.notion")
 
 AUTO_PARENT_PAGE_TITLE = "A-ka"
 AUTO_PARENT_PAGE_CONTENT = "A-ka가 요약 결과를 저장하는 페이지입니다."
@@ -36,6 +36,32 @@ def resolve_internal_user_id(db: Session, user_id: int | str | None) -> int | No
 
     user = get_user_by_user_name(db, str(user_id))
     return user.id if user is not None else None
+
+
+def resolve_recipient_email(user_id: int | str | None) -> str | None:
+    """user_id → internal_user_id → NotionConnection.owner_user_email 일괄 조회.
+
+    SMTP 발송 전 사용자의 노션 연동 이메일을 가져오는 공통 헬퍼.
+    실패 시 None 반환 (호출자가 발송 스킵 처리).
+    """
+    from database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        internal_user_id = resolve_internal_user_id(db, user_id)
+        if not internal_user_id:
+            return None
+        conn = get_notion_connection(db, internal_user_id)
+        return conn.owner_user_email if conn else None
+    except Exception as exc:
+        logger.warning(
+            "Failed to resolve recipient email. user_id=%s error=%s",
+            user_id,
+            exc,
+        )
+        return None
+    finally:
+        db.close()
 
 
 def upsert_notion_connection(

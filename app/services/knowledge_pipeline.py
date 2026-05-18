@@ -17,6 +17,7 @@ from app.services.intelligence_service import IntelligenceService
 from app.services.notion_connection_service import (
     create_summary_page_for_user,
     resolve_internal_user_id,
+    resolve_recipient_email,
 )
 from app.services.notion_service import NotionServiceError
 from app.services.search_service import find_similar_videos
@@ -220,55 +221,69 @@ class KnowledgePipelineService:
         if include_similar and user_id and db_result:
             current_knowledge_id = db_result.get("knowledge_id")
             if current_knowledge_id:
+                # 수신자 사전 조회 — 0건 결과/예외 모두 알림 발송에 사용
+                recipient_email = resolve_recipient_email(user_id)
                 try:
                     similar_videos = find_similar_videos(
                         user_id=int(user_id),
                         summary=full_summary,
                         current_knowledge_id=current_knowledge_id,
                     )
-                    if similar_videos:
-                        db = SessionLocal()
-                        try:
-                            internal_user_id = resolve_internal_user_id(db, user_id)
-                            if internal_user_id:
-                                user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
-                                recipient_email = user_conn.owner_user_email if user_conn else None
-                                if recipient_email:
-                                    step3_logger.info("Sending similar videos email via SMTP")
-                                    send_search_result_email(
-                                        recipient_email=recipient_email,
-                                        query="요청하신 영상과 비슷한 영상 찾기",
-                                        answer="분석된 요약을 바탕으로 가장 유사한 주제를 다루는 영상들을 찾았습니다.",
-                                        chunks=similar_videos,
-                                    )
-                        finally:
-                            db.close()
+                    if recipient_email:
+                        if similar_videos:
+                            step3_logger.info("Sending similar videos email via SMTP")
+                            send_search_result_email(
+                                recipient_email=recipient_email,
+                                query="요청하신 영상과 비슷한 영상 찾기",
+                                answer="분석된 요약을 바탕으로 가장 유사한 주제를 다루는 영상들을 찾았습니다.",
+                                chunks=similar_videos,
+                            )
+                        else:
+                            step3_logger.info("유사 영상 0건 — 안내 메일 발송")
+                            send_search_result_email(
+                                recipient_email=recipient_email,
+                                query="요청하신 영상과 비슷한 영상 찾기",
+                                answer="저장된 영상 중 유사한 주제를 다루는 영상을 찾지 못했어요.",
+                                chunks=[],
+                            )
                 except Exception as e:
                     step3_logger.warning(f"유사 영상 검색 실패 (파이프라인 영향 없음): {e}")
+                    if recipient_email:
+                        send_search_result_email(
+                            recipient_email=recipient_email,
+                            query="비슷한 영상 찾기",
+                            answer="유사 영상 검색 중 오류가 발생했어요. 잠시 후 다시 시도해주세요.",
+                            chunks=[],
+                        )
 
         # RAG 답변 처리 (embedded_question)
-        if embedded_question and user_id and db_result:
+        if (
+            embedded_question
+            and user_id
+            and db_result
+            and db_result.get("knowledge_id")
+        ):
             try:
-                db = SessionLocal()
-                internal_user_id = resolve_internal_user_id(db, user_id)
-                if internal_user_id:
-                    user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
-                    recipient_email = user_conn.owner_user_email if user_conn else None
+                recipient_email = resolve_recipient_email(user_id)
+                if recipient_email:
+                    step3_logger.info(f"Generating RAG answer for embedded_question: {embedded_question}")
+                    chunks_data = data.get("chunks", [])
+                    context_parts = []
+                    if full_summary:
+                        context_parts.append(f"[전체 요약]\n{full_summary}")
 
-                    if recipient_email:
-                        step3_logger.info(f"Generating RAG answer for embedded_question: {embedded_question}")
-                        chunks_data = data.get("chunks", [])
-                        # Chunks to format for the RAG LLM
-                        context_parts = []
-                        if full_summary:
-                            context_parts.append(f"[전체 요약]\n{full_summary}")
-                        
-                        for i, chunk in enumerate(chunks_data[:10]):  # 앞쪽 청크 위주로 제한
-                            content = chunk.get("summary_detail") or chunk.get("content", "")
-                            context_parts.append(f"[본문 일부 {i+1}]\n{content}")
-                        
-                        context_text = "\n\n".join(context_parts)
-                        
+                    for i, chunk in enumerate(chunks_data[:10]):  # 앞쪽 청크 위주로 제한
+                        content = chunk.get("summary_detail") or chunk.get("content", "")
+                        context_parts.append(f"[본문 일부 {i+1}]\n{content}")
+
+                    context_text = "\n\n".join(context_parts)
+
+                    # 정상 흐름에선 항상 채워지지만, 비어있으면 LLM 환각 위험이 있으므로 방어
+                    if not context_text.strip():
+                        step3_logger.warning(
+                            "embedded_question RAG context 비어있음 — LLM 호출 스킵"
+                        )
+                    else:
                         llm = get_chat_model_primary()
                         response = llm.invoke([
                             SystemMessage(
@@ -284,7 +299,7 @@ class KnowledgePipelineService:
                             ),
                             HumanMessage(content=f"[영상 내용]\n{context_text}\n\n[질문]\n{embedded_question}")
                         ])
-                        
+
                         answer = getattr(response, "content", "")
                         if answer:
                             url = f"https://www.youtube.com/watch?v={video_id}"
