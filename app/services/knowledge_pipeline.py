@@ -21,8 +21,12 @@ from app.services.notion_connection_service import (
 )
 from app.services.notion_service import NotionServiceError
 from app.services.search_service import find_similar_videos
+from app.core.llm import get_chat_model_primary
+from langchain_core.messages import SystemMessage, HumanMessage
 from app.services.transcript_chunking import chunk_by_time
 from app.services.transcript_refine import refine_transcript_segments
+from app.services.smtp_service import send_search_result_email
+from app.models.notion import NotionConnection
 from app.services.youtube_service import YouTubeService
 from database import SessionLocal, async_session_maker
 
@@ -55,6 +59,7 @@ class KnowledgePipelineService:
         video_id: str,
         user_id: int | None = None,
         include_similar: bool = False,
+        embedded_question: str | None = None,
     ) -> dict[str, Any]:
         try:
             metadata = self.youtube_service.get_metadata(video_id)
@@ -80,6 +85,7 @@ class KnowledgePipelineService:
                 "metadata": metadata,
                 "chunks": [],
                 "include_similar": include_similar,
+                "embedded_question": embedded_question,
             }
 
         chunks = chunk_by_time(refined_segments, 60000)
@@ -105,6 +111,7 @@ class KnowledgePipelineService:
             "metadata": metadata,
             "chunks": saved_chunks,
             "include_similar": include_similar,
+            "embedded_question": embedded_question,
         }
 
     def run_intelligence(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -113,6 +120,7 @@ class KnowledgePipelineService:
         metadata = data.get("metadata")
         user_id = data.get("user_id")
         include_similar = data.get("include_similar", False)
+        embedded_question = data.get("embedded_question")
 
         if not chunks:
             reason = f"자막/STT 추출 후 chunks 없음 (video_id={video_id})"
@@ -129,6 +137,7 @@ class KnowledgePipelineService:
         )
         result["user_id"] = user_id
         result["include_similar"] = include_similar
+        result["embedded_question"] = embedded_question
 
         try:
             run_async(
@@ -158,6 +167,7 @@ class KnowledgePipelineService:
         full_summary = data.get("full_summary", "")
         raw_category = data.get("category")
         include_similar = data.get("include_similar", False)
+        embedded_question = data.get("embedded_question")
 
         db_result = None
         resolved_category = raw_category
@@ -205,6 +215,58 @@ class KnowledgePipelineService:
                     )
                 except Exception as e:
                     step3_logger.warning(f"유사 영상 검색 실패 (파이프라인 영향 없음): {e}")
+
+        # RAG 답변 처리 (embedded_question)
+        if embedded_question and user_id and db_result:
+            try:
+                db = SessionLocal()
+                internal_user_id = resolve_internal_user_id(db, user_id)
+                if internal_user_id:
+                    user_conn = db.query(NotionConnection).filter_by(user_id=internal_user_id).first()
+                    recipient_email = user_conn.owner_user_email if user_conn else None
+
+                    if recipient_email:
+                        step3_logger.info(f"Generating RAG answer for embedded_question: {embedded_question}")
+                        chunks_data = data.get("chunks", [])
+                        # Chunks to format for the RAG LLM
+                        context_parts = []
+                        if full_summary:
+                            context_parts.append(f"[전체 요약]\n{full_summary}")
+                        
+                        for i, chunk in enumerate(chunks_data[:10]):  # 앞쪽 청크 위주로 제한
+                            content = chunk.get("summary_detail") or chunk.get("content", "")
+                            context_parts.append(f"[본문 일부 {i+1}]\n{content}")
+                        
+                        context_text = "\n\n".join(context_parts)
+                        
+                        llm = get_chat_model_primary()
+                        response = llm.invoke([
+                            SystemMessage(
+                                content=(
+                                    "너는 방금 사용자가 전송한 유튜브 영상의 내용을 기반으로 답변하는 AI 어시스턴트야. "
+                                    "아래 [영상 내용]은 영상의 전체 요약과 본문 일부야. "
+                                    "반드시 이 내용만을 근거로 사용자의 질문에 답변한다.\n\n"
+                                    "[필수 규칙]\n"
+                                    "1. 없는 내용 금지: 영상 내용에 없는 내용은 절대 추측하거나 지어내지 않는다.\n"
+                                    "2. 존댓말 필수: 모든 문장은 '~입니다', '~해요' 형태의 존댓말로 끝낸다.\n"
+                                    "3. 간결하게: 3~5문장으로 친절하고 명확하게 답변한다."
+                                )
+                            ),
+                            HumanMessage(content=f"[영상 내용]\n{context_text}\n\n[질문]\n{embedded_question}")
+                        ])
+                        
+                        answer = getattr(response, "content", "")
+                        if answer:
+                            url = f"https://www.youtube.com/watch?v={video_id}"
+                            pseudo_chunk = {"original_url": url, "title": title}
+                            send_search_result_email(
+                                recipient_email=recipient_email,
+                                query=embedded_question,
+                                answer=answer,
+                                chunks=[pseudo_chunk]
+                            )
+            except Exception as e:
+                step3_logger.error(f"embedded_question 처리 중 실패: {e}")
 
         step3_logger.info(f"Completed video_id={video_id}, title={title}")
         return {
