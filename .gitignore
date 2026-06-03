@@ -381,3 +381,12 @@ docs/
 *.png
 test_db_diag*.py
 tests/
+
+# portfolio 폴더는 모든 자산 추적 (.md/.jpg/.png/.gif/.mp4/.pdf)
+!portfolio/
+!portfolio/**
+# claude code 로컬 설정은 제외
+.claude/
+portfolio/_build_pdf.py
+portfolio/_combined.html
+portfolio/_key_smoketest.py
