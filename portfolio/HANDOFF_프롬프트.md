@@ -49,7 +49,26 @@ C:\A-ka_backend\portfolio\01_대표프로젝트_AKA.md     ← 포트폴리오 �
 | 20분 | `F9dSJm2VPGk` | 미국 마리화나 규제 완화와 의료용 대마의 화학적 작용 | 48 |
 | 60분 | `-A9RxJn5V2o` | 이종범 작가, '장송의 프리렌' 명작 판타지 만화 분석 | 72 |
 
-데스크탑에는 빈 DB일 가능성 — 필요 시 `portfolio/backups/db_backup_20260604_194739.sql` 로컬에 복사 후 `psql -d aka_db -f <파일>` 또는 같은 URL 3개 다시 UPLOAD.
+**데스크탑 DB는 비어있을 것 — 같은 영상 3개 다시 UPLOAD가 권장 경로** (SQL 백업 옮기는 것보다 단순하고 데스크탑 풀스택 동작 검증도 동시에 됨):
+
+```bash
+# (선택) 기존 데이터 있으면 wipe — 깨끗한 베이스라인
+.venv/Scripts/python.exe -c "
+import sys; sys.path.insert(0,'.')
+from database import SessionLocal
+from sqlalchemy import text
+s=SessionLocal()
+s.execute(text('TRUNCATE TABLE youtube_knowledge_chunk, youtube_metadata, knowledge, category RESTART IDENTITY CASCADE'))
+s.commit(); s.close()
+"
+
+# 같은 영상 3개 UPLOAD (kpi_collector로 측정 + 결과 자동 append)
+.venv/Scripts/python.exe portfolio/kpi_collector.py upload --url "https://www.youtube.com/watch?v=o58i-LcqxVE" --label "5분 (데스크탑 재측정)"
+.venv/Scripts/python.exe portfolio/kpi_collector.py upload --url "https://www.youtube.com/watch?v=F9dSJm2VPGk" --label "20분 (데스크탑 재측정)"
+.venv/Scripts/python.exe portfolio/kpi_collector.py upload --url "https://www.youtube.com/watch?v=-A9RxJn5V2o" --label "60분 (데스크탑 재측정)"
+```
+
+부가 이득: 노트북 측정값과 데스크탑 측정값을 비교하면 **"측정 재현성"** 자체가 포트폴리오 강점이 됨 (분산·머신 의존도 평가).
 
 ### 측정 완료 항목 (수치)
 
