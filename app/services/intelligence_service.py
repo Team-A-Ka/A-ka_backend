@@ -244,7 +244,9 @@ def summarize_each_chunk(state: IntelligenceState) -> dict:
         _process_single_chunk, context_block=context_block, metadata=metadata
     )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+    # max_workers는 settings.CHUNK_SUMMARY_MAX_WORKERS로 외부화. KPI 실험·환경별 튜닝 가능.
+    from app.core.config import settings as _settings
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_settings.CHUNK_SUMMARY_MAX_WORKERS) as executor:
         results = executor.map(chunk_runner, chunks)
         summarized_chunks = list(results)
 

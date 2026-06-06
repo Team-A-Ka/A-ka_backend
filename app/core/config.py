@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # DB 컬럼이 vector(1536)이므로 1536 유지하면 스키마 마이그레이션 불요.
     GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
     GEMINI_EMBEDDING_DIM: int = 1536
+
+    # 청크 요약 LLM 호출 병렬도 (ThreadPoolExecutor.max_workers)
+    # KPI 실험 목적으로 env로 외부화. 1로 두면 직렬 처리, 10이 운영 기본값.
+    CHUNK_SUMMARY_MAX_WORKERS: int = 10
     LLM_TEMPERATURE: float = 0.0
     LLM_TIMEOUT: int = 30
     LLM_PRIMARY_PROVIDER: str = "openai"
