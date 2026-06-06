@@ -55,8 +55,20 @@ def answer_duplicate_embedded_question_task(self, knowledge_id: str, video_id: s
 # 에러 핸들러
 # ==========================================
 @shared_task(bind=True, name="knowledge.handle_failure")
-def handle_pipeline_failure_task(self, video_id: str, user_id: int, request, exc, traceback):
-    task_id = getattr(request, "id", None) or str(request)
+def handle_pipeline_failure_task(self, exc, traceback, video_id: str, user_id: int):
+    """
+    Celery 5.x errback 호출 규약:
+      arguments(fn.__header__).args[1:3] == ('exc', 'traceback') 이면
+      Celery가 레거시 errback 모드로 분기 → (exc, traceback)을 자동 주입.
+      따라서 self 직후의 두 인자는 반드시 'exc', 'traceback' 순서·이름이어야 함.
+      .on_error(handle_pipeline_failure_task.s(video_id, user_id)) 의 partial 인자는
+      뒤쪽에 추가됨 → 최종 호출은 handle(exc, traceback, video_id, user_id).
+
+    이전 시그니처 (self, video_id, user_id, request, exc, traceback)는 Celery 4.x용.
+    5.x 업그레이드 후 args[1:3]=('video_id','user_id')라 모던 모드로 분류되어
+    task_id 1개만 들어와 TypeError 발생했음.
+    """
+    task_id = self.request.id if self.request else None
     result = knowledge_pipeline_service.handle_failure(video_id, task_id)
     send_user_processing_error_email(
         user_id=user_id,

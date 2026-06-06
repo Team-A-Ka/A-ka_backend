@@ -10,16 +10,14 @@ from langgraph.graph import END, START, StateGraph
 
 from app.core.llm import (
     base_message_text,
+    embed_texts,
     get_chat_model_primary,
     get_llm,
-    get_openai_sdk_client,
-    openai_embedding_model_id,
 )
 from app.schemas.graph_state import IntelligenceState, VideoOverview
 
 logger = logging.getLogger("aka.upload.step2")
 
-openai_client = get_openai_sdk_client()
 _chunk_summary_llm = get_llm()
 
 _overview_chain = None
@@ -267,16 +265,12 @@ def embed_summaries_node(state: IntelligenceState) -> dict:
         return {"embeddings": embeddings}
 
     try:
-        response = openai_client.embeddings.create(
-            model=openai_embedding_model_id(),
-            input=texts,
-        )
-        embeddings = [item.embedding for item in response.data]
+        # provider 분기는 app.core.llm.get_embeddings()에서 처리.
+        # Gemini(gemini-embedding-001 @ 1536) / OpenAI(text-embedding-3-small @ 1536) 모두 동일 차원.
+        embeddings = embed_texts(texts)
         for index, chunk in enumerate(summarized_chunks):
             if index < len(embeddings):
                 chunk["embedding"] = embeddings[index]
-        if hasattr(response, "usage") and response.usage:
-            logger.debug(f"  embedding tokens: {response.usage.total_tokens}")
         if embeddings:
             logger.info(
                 f"  embeddings created: {len(embeddings)}, dim={len(embeddings[0])}"

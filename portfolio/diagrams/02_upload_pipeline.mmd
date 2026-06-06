@@ -1,0 +1,22 @@
+graph LR
+    Start([UPLOAD 진입]) --> Step1["Step 1<br/>collect_and_chunk<br/>자막 추출 · 의미 청킹"]
+    Step1 --> Step2["Step 2<br/>run_intelligence_graph<br/>LangGraph"]
+    Step2 --> Step3["Step 3<br/>update_pipeline_status<br/>카테고리 정규화 · DB · 노션"]
+    Step3 --> Done([완료])
+
+    Step2 --> Sub1[summarize_each_chunk<br/>ThreadPool 10 병렬]
+    Sub1 --> Sub2[embed_summaries<br/>배치 임베딩 1536-d]
+    Sub2 --> Sub3[generate_overview<br/>title · summary · category]
+
+    OnError{".on_error<br/>핸들러"} -.->|실패 시 자동| Failed["DB FAILED 마킹<br/>안내 메일 발송"]
+    Step1 -.실패.-> OnError
+    Step2 -.실패.-> OnError
+    Step3 -.실패.-> OnError
+
+    classDef chain fill:#dde7f0,stroke:#1a4d80,stroke-width:1.5px,color:#000
+    classDef langgraph fill:#e8e8e8,stroke:#555,stroke-width:1px,color:#000
+    classDef error fill:#f5e0e0,stroke:#993333,stroke-width:1px,color:#000
+
+    class Step1,Step2,Step3 chain
+    class Sub1,Sub2,Sub3 langgraph
+    class OnError,Failed error

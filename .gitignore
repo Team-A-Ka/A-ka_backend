@@ -387,6 +387,8 @@ tests/
 !portfolio/**
 # claude code 로컬 설정은 제외
 .claude/
-portfolio/_build_pdf.py
+
+# portfolio/ — dev 스크립트 포함 (데스크탑 동기화). 단 생성·임시 산출물 제외
 portfolio/_combined.html
-portfolio/_key_smoketest.py
+portfolio/logs/
+portfolio/backups/

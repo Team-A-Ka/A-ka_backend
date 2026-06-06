@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from openai import OpenAI
 from langchain_anthropic import ChatAnthropic
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from app.core.config import settings
 
 _openai_sdk: OpenAI | None = None
+_embeddings_singleton: Embeddings | None = None
 
 
 def get_openai_sdk_client() -> OpenAI:
@@ -113,6 +115,55 @@ def get_chat_model_primary() -> BaseChatModel:
             f"LLM provider '{name}' is not configured (check API key in settings)."
         )
     return _build_llm(name)
+
+
+def _resolve_embedding_provider() -> str:
+    explicit = settings.EMBEDDING_PROVIDER.strip().lower()
+    if explicit:
+        return explicit
+    return settings.LLM_PRIMARY_PROVIDER.strip().lower() or "openai"
+
+
+def get_embeddings() -> Embeddings:
+    """싱글톤 임베딩 클라이언트. provider는 `EMBEDDING_PROVIDER`(빈 값이면 LLM_PRIMARY_PROVIDER) 따름."""
+    global _embeddings_singleton
+    if _embeddings_singleton is not None:
+        return _embeddings_singleton
+
+    provider = _resolve_embedding_provider()
+    if provider in {"gemini", "google"}:
+        key = settings.GOOGLE_API_KEY.strip() or None
+        if not key:
+            raise ValueError("GOOGLE_API_KEY is not configured for Gemini embeddings.")
+        # gemini-embedding-001은 Matryoshka — output_dimensionality로 차원 선택 가능.
+        # DB 컬럼이 vector(1536)이므로 1536으로 고정해 스키마 마이그레이션 회피.
+        _embeddings_singleton = GoogleGenerativeAIEmbeddings(
+            model=settings.GEMINI_EMBEDDING_MODEL,
+            google_api_key=key,
+            output_dimensionality=settings.GEMINI_EMBEDDING_DIM,
+        )
+    elif provider == "openai":
+        key = settings.OPENAI_API_KEY.strip() or None
+        if not key:
+            raise ValueError("OPENAI_API_KEY is not configured for OpenAI embeddings.")
+        _embeddings_singleton = OpenAIEmbeddings(
+            model=settings.OPENAI_EMBEDDING_MODEL,
+            api_key=key,
+        )
+    else:
+        raise ValueError(f"Unsupported embedding provider: {provider}")
+
+    return _embeddings_singleton
+
+
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    """다수 텍스트를 배치 임베딩. UPLOAD 파이프라인용."""
+    return get_embeddings().embed_documents(texts)
+
+
+def embed_query(text: str) -> list[float]:
+    """단일 텍스트 임베딩. SEARCH·FIND_SIMILAR용."""
+    return get_embeddings().embed_query(text)
 
 
 def get_llm() -> BaseChatModel:

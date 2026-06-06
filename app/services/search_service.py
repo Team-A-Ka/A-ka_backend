@@ -13,15 +13,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import uuid
 
 from langchain_core.runnables import RunnableConfig
-from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
 from sqlalchemy import text
 
 from app.core.llm import (
     base_message_text,
+    embed_query,
     get_llm,
-    get_openai_sdk_client,
-    openai_embedding_model_id,
 )
 from app.schemas.graph_state import SearchState
 from database import SessionLocal
@@ -30,7 +28,6 @@ from database import SessionLocal
 search_logger = logging.getLogger("aka.search")
 similar_logger = logging.getLogger("aka.similar")
 
-openai_client = get_openai_sdk_client()
 _rag_llm = get_llm()
 
 
@@ -42,13 +39,8 @@ def vectorize_query(state: SearchState) -> dict:
     query = state.get("query", "")
     search_logger.info("노드1(벡터화) 시작")
 
-    response = openai_client.embeddings.create(
-        model=openai_embedding_model_id(),
-        input=query,
-    )
-    query_vector = response.data[0].embedding
-    if hasattr(response, "usage") and response.usage:
-        search_logger.debug(f"  토큰 사용량 (벡터화): {response.usage.total_tokens}")
+    # provider 분기(Gemini/OpenAI)는 app.core.llm.get_embeddings() 싱글톤에서 처리.
+    query_vector = embed_query(query)
 
     search_logger.info(f"노드1(벡터화) 완료 (차원: {len(query_vector)})")
     return {"query_vector": query_vector}
@@ -258,17 +250,9 @@ def find_similar_videos(
         similar_logger.warning("summary 없음 — 스킵")
         return []
 
-    # 1. summary 벡터화
+    # 1. summary 벡터화 (provider는 get_embeddings() 싱글톤이 결정)
     try:
-        response = openai_client.embeddings.create(
-            model=openai_embedding_model_id(),
-            input=summary,
-        )
-        query_vector = response.data[0].embedding
-        if hasattr(response, "usage") and response.usage:
-            similar_logger.debug(
-                f"  토큰 사용량 (벡터화): {response.usage.total_tokens}"
-            )
+        query_vector = embed_query(summary)
     except Exception as e:
         similar_logger.error(f"벡터화 실패: {e}")
         return []

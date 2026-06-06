@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    # 임베딩 provider — 빈 값이면 LLM_PRIMARY_PROVIDER 따름.
+    # 가능한 값: "openai" | "gemini" | "google"
+    EMBEDDING_PROVIDER: str = ""
+    # Gemini 임베딩 — gemini-embedding-001은 Matryoshka 학습 모델이라
+    # output_dimensionality로 768/1536/3072 중 선택 가능.
+    # DB 컬럼이 vector(1536)이므로 1536 유지하면 스키마 마이그레이션 불요.
+    GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-001"
+    GEMINI_EMBEDDING_DIM: int = 1536
     LLM_TEMPERATURE: float = 0.0
     LLM_TIMEOUT: int = 30
     LLM_PRIMARY_PROVIDER: str = "openai"

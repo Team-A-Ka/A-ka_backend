@@ -1,0 +1,18 @@
+graph TD
+    Start([사용자 질문 입력]) --> Vec[vectorize_query<br/>1536차원 임베딩]
+    Vec --> Search[search_chunks<br/>pgvector 코사인 검색<br/>threshold 0.7 · Top 5]
+    Search --> Check{검색 결과<br/>존재?}
+
+    Check -->|Yes| Gen[generate_answer<br/>LLM RAG 답변<br/>출처 URL 강제 포함]
+    Check -->|No| NoRes[no_result_reply<br/>저장된 영상 없음 안내]
+
+    Gen --> SMTP[SMTP 메일 발송]
+    NoRes --> End([대화 종료])
+
+    classDef node fill:#dde7f0,stroke:#1a4d80,stroke-width:1.5px,color:#000
+    classDef decision fill:#fafafa,stroke:#555,stroke-width:1.5px,color:#000
+    classDef output fill:#f0f0f0,stroke:#555,stroke-width:1px,color:#000
+
+    class Vec,Search,Gen,NoRes node
+    class Check decision
+    class SMTP,End output
