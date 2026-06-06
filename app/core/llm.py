@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import time
+
 from openai import OpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_core.embeddings import Embeddings
@@ -156,14 +159,57 @@ def get_embeddings() -> Embeddings:
     return _embeddings_singleton
 
 
+_embed_logger = logging.getLogger("aka.embeddings")
+
+# Gemini 임베딩(gemini-embedding-001)은 RPM 제한이 빡빡해 대량 청크를 한 번에
+# batchEmbedContents로 보내면 429 RESOURCE_EXHAUSTED가 난다. 그래서:
+#   1) sub-batch로 나눠 호출량 스파이크를 줄이고
+#   2) 429/503은 지수 백오프로 재시도한다.
+# (원래는 재시도가 없어 RPM 스파이크 시 임베딩이 0개로 조용히 실패 → RAG가 비어버림)
+_EMBED_SUB_BATCH = 16
+_EMBED_MAX_RETRIES = 5
+_EMBED_BACKOFF_BASE_S = 8.0
+_EMBED_BACKOFF_MAX_S = 120.0
+_RATE_LIMIT_MARKERS = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE")
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    msg = str(exc)
+    return any(m in msg for m in _RATE_LIMIT_MARKERS)
+
+
+def _embed_with_retry(fn, arg):
+    """429/503에만 지수 백오프 재시도. 그 외 예외는 즉시 전파."""
+    delay = _EMBED_BACKOFF_BASE_S
+    for attempt in range(1, _EMBED_MAX_RETRIES + 1):
+        try:
+            return fn(arg)
+        except Exception as exc:
+            if not _is_rate_limit_error(exc) or attempt == _EMBED_MAX_RETRIES:
+                raise
+            _embed_logger.warning(
+                "임베딩 레이트 제한(시도 %d/%d) — %.0fs 백오프 후 재시도: %s",
+                attempt, _EMBED_MAX_RETRIES, delay, str(exc)[:120],
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, _EMBED_BACKOFF_MAX_S)
+
+
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """다수 텍스트를 배치 임베딩. UPLOAD 파이프라인용."""
-    return get_embeddings().embed_documents(texts)
+    """다수 텍스트를 배치 임베딩. UPLOAD 파이프라인용.
+
+    sub-batch로 나눠 호출하고 각 배치를 429/503 백오프 재시도로 보호한다."""
+    embeddings = get_embeddings()
+    out: list[list[float]] = []
+    for i in range(0, len(texts), _EMBED_SUB_BATCH):
+        sub = texts[i : i + _EMBED_SUB_BATCH]
+        out.extend(_embed_with_retry(embeddings.embed_documents, sub))
+    return out
 
 
 def embed_query(text: str) -> list[float]:
-    """단일 텍스트 임베딩. SEARCH·FIND_SIMILAR용."""
-    return get_embeddings().embed_query(text)
+    """단일 텍스트 임베딩. SEARCH·FIND_SIMILAR용. 429/503 백오프 재시도."""
+    return _embed_with_retry(get_embeddings().embed_query, text)
 
 
 def get_llm() -> BaseChatModel:

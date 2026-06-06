@@ -704,3 +704,323 @@
   "measured_at": "2026-06-06T22:24:04"
 }
 ```
+
+## UPLOAD — E2E재검증 영상1
+
+```json
+{
+  "label": "E2E재검증 영상1",
+  "url": "https://www.youtube.com/watch?v=o58i-LcqxVE",
+  "video_id": "o58i-LcqxVE",
+  "title": "물티슈 성분 논란, 화학적 관점에서 종결",
+  "category": "과학",
+  "model_chat": "gemini-2.5-flash-lite",
+  "model_embed": "gemini-embedding-001",
+  "embed_dim": 1536,
+  "total_wall_s": 12.34,
+  "chunks": 38,
+  "embeddings": 0,
+  "summary_len": 189,
+  "step_durations_s": {
+    "step1_chunking": null,
+    "step2_chunk_summary": null,
+    "step2_embedding": null,
+    "step2_overview": null,
+    "step3_publish": null
+  },
+  "estimated_llm_calls": 40,
+  "estimated_embedding_calls": 1,
+  "events": {
+    "chunk_summary_failed": 0,
+    "overview_failed": 0,
+    "embedding_block_done": 0,
+    "any_429": 0
+  },
+  "langsmith": {
+    "llm_calls": 40,
+    "embedding_calls": 0,
+    "input_tokens": 39328,
+    "output_tokens": 3137,
+    "total_runs_seen": 48,
+    "run_type_counts": {
+      "parser": 2,
+      "llm": 40,
+      "chain": 6
+    }
+  },
+  "cost_input_usd": 0.0039328,
+  "cost_output_usd": 0.0012548000000000001,
+  "cost_total_usd": 0.0051876000000000005,
+  "transitions": [
+    [
+      0.022999048233032227,
+      "PENDING",
+      0,
+      0,
+      0
+    ],
+    [
+      2.0310542583465576,
+      "PENDING",
+      38,
+      0,
+      0
+    ],
+    [
+      11.06880784034729,
+      "PENDING",
+      38,
+      0,
+      189
+    ],
+    [
+      12.073111295700073,
+      "COMPLETED",
+      38,
+      0,
+      189
+    ]
+  ],
+  "measured_at": "2026-06-06T23:50:08"
+}
+```
+
+## UPLOAD — E2E재검증 영상2
+
+```json
+{
+  "label": "E2E재검증 영상2",
+  "url": "https://www.youtube.com/watch?v=F9dSJm2VPGk",
+  "video_id": "F9dSJm2VPGk",
+  "title": "미국 마리화나 규제 완화와 의료용 대마 화학 분석",
+  "category": "과학",
+  "model_chat": "gemini-2.5-flash-lite",
+  "model_embed": "gemini-embedding-001",
+  "embed_dim": 1536,
+  "total_wall_s": 13.34,
+  "chunks": 48,
+  "embeddings": 48,
+  "summary_len": 190,
+  "step_durations_s": {
+    "step1_chunking": null,
+    "step2_chunk_summary": null,
+    "step2_embedding": null,
+    "step2_overview": null,
+    "step3_publish": null
+  },
+  "estimated_llm_calls": 50,
+  "estimated_embedding_calls": 1,
+  "events": {
+    "chunk_summary_failed": 0,
+    "overview_failed": 0,
+    "embedding_block_done": 0,
+    "any_429": 0
+  },
+  "langsmith": {
+    "llm_calls": 50,
+    "embedding_calls": 0,
+    "input_tokens": 54545,
+    "output_tokens": 4691,
+    "total_runs_seen": 58,
+    "run_type_counts": {
+      "parser": 2,
+      "llm": 50,
+      "chain": 6
+    }
+  },
+  "cost_input_usd": 0.005454500000000001,
+  "cost_output_usd": 0.0018764,
+  "cost_total_usd": 0.007330900000000001,
+  "transitions": [
+    [
+      0.02227020263671875,
+      "PENDING",
+      0,
+      0,
+      0
+    ],
+    [
+      3.035212755203247,
+      "PENDING",
+      48,
+      0,
+      0
+    ],
+    [
+      12.076398849487305,
+      "PENDING",
+      48,
+      48,
+      190
+    ],
+    [
+      13.080808401107788,
+      "COMPLETED",
+      48,
+      48,
+      190
+    ]
+  ],
+  "measured_at": "2026-06-06T23:56:08"
+}
+```
+
+## UPLOAD — E2E재검증 영상3
+
+```json
+{
+  "label": "E2E재검증 영상3",
+  "url": "https://www.youtube.com/watch?v=-A9RxJn5V2o",
+  "video_id": "-A9RxJn5V2o",
+  "title": "장송의 프리렌: 명작 판타지 만화 분석",
+  "category": "만화",
+  "model_chat": "gemini-2.5-flash-lite",
+  "model_embed": "gemini-embedding-001",
+  "embed_dim": 1536,
+  "total_wall_s": 15.34,
+  "chunks": 72,
+  "embeddings": 72,
+  "summary_len": 148,
+  "step_durations_s": {
+    "step1_chunking": null,
+    "step2_chunk_summary": null,
+    "step2_embedding": null,
+    "step2_overview": null,
+    "step3_publish": null
+  },
+  "estimated_llm_calls": 74,
+  "estimated_embedding_calls": 1,
+  "events": {
+    "chunk_summary_failed": 0,
+    "overview_failed": 0,
+    "embedding_block_done": 0,
+    "any_429": 0
+  },
+  "langsmith": {
+    "llm_calls": 74,
+    "embedding_calls": 0,
+    "input_tokens": 87341,
+    "output_tokens": 5868,
+    "total_runs_seen": 82,
+    "run_type_counts": {
+      "parser": 2,
+      "llm": 74,
+      "chain": 6
+    }
+  },
+  "cost_input_usd": 0.0087341,
+  "cost_output_usd": 0.0023472000000000002,
+  "cost_total_usd": 0.0110813,
+  "transitions": [
+    [
+      0.02351093292236328,
+      "PENDING",
+      0,
+      0,
+      0
+    ],
+    [
+      3.035808563232422,
+      "PENDING",
+      72,
+      0,
+      0
+    ],
+    [
+      14.083377361297607,
+      "PENDING",
+      72,
+      72,
+      148
+    ],
+    [
+      15.088032960891724,
+      "COMPLETED",
+      72,
+      72,
+      148
+    ]
+  ],
+  "measured_at": "2026-06-06T23:56:54"
+}
+```
+
+## UPLOAD — 재검증 임베딩retry
+
+```json
+{
+  "label": "재검증 임베딩retry",
+  "url": "https://www.youtube.com/watch?v=o58i-LcqxVE",
+  "video_id": "o58i-LcqxVE",
+  "title": "물티슈 성분 논란, 화학적 관점에서 종결",
+  "category": "과학",
+  "model_chat": "gemini-2.5-flash-lite",
+  "model_embed": "gemini-embedding-001",
+  "embed_dim": 1536,
+  "total_wall_s": 12.31,
+  "chunks": 38,
+  "embeddings": 38,
+  "summary_len": 164,
+  "step_durations_s": {
+    "step1_chunking": null,
+    "step2_chunk_summary": null,
+    "step2_embedding": null,
+    "step2_overview": null,
+    "step3_publish": null
+  },
+  "estimated_llm_calls": 40,
+  "estimated_embedding_calls": 1,
+  "events": {
+    "chunk_summary_failed": 0,
+    "overview_failed": 0,
+    "embedding_block_done": 0,
+    "any_429": 0
+  },
+  "langsmith": {
+    "llm_calls": 40,
+    "embedding_calls": 0,
+    "input_tokens": 42211,
+    "output_tokens": 3480,
+    "total_runs_seen": 48,
+    "run_type_counts": {
+      "parser": 2,
+      "llm": 40,
+      "chain": 6
+    }
+  },
+  "cost_input_usd": 0.0042211,
+  "cost_output_usd": 0.001392,
+  "cost_total_usd": 0.0056131,
+  "transitions": [
+    [
+      0.02250075340270996,
+      "PENDING",
+      0,
+      0,
+      0
+    ],
+    [
+      3.0348949432373047,
+      "PENDING",
+      38,
+      0,
+      0
+    ],
+    [
+      11.069631338119507,
+      "PENDING",
+      38,
+      38,
+      164
+    ],
+    [
+      12.073958158493042,
+      "COMPLETED",
+      38,
+      38,
+      164
+    ]
+  ],
+  "measured_at": "2026-06-07T00:47:01"
+}
+```
