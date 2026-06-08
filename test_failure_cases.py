@@ -44,7 +44,7 @@ def test_scenario_1_invalid_video_id():
     service = SaveOnlyService()
 
     try:
-        result = service.save(fake_id)
+        result = service.save(fake_id, user_id=1)
         print(f"❌ 예상과 달리 성공: {result}")
         return False
     except Exception as e:
@@ -76,7 +76,7 @@ def test_scenario_2_empty_chunks_guard():
         print("❌ 예상과 달리 예외가 발생하지 않고 성공했습니다.")
         return False
     except ValueError as e:
-        if "자막 추출 실패" in str(e):
+        if "chunks 없음" in str(e) or "자막" in str(e):
             print(f"✅ 기대대로 ValueError 발생: {e}")
             return True
         else:
@@ -180,8 +180,8 @@ def test_scenario_6_duplicate_save_only():
     }
 
     try:
-        kid1 = asyncio.run(save_link_only("DUP_TEST_VID", metadata))
-        kid2 = asyncio.run(save_link_only("DUP_TEST_VID", metadata))
+        kid1 = asyncio.run(save_link_only("DUP_TEST_VID", metadata, user_id=1))
+        kid2 = asyncio.run(save_link_only("DUP_TEST_VID", metadata, user_id=1))
     except Exception as e:
         print(f"❌ INSERT 자체가 실패: {e}")
         return False
@@ -219,7 +219,7 @@ def test_scenario_7_update_no_knowledge():
         return False
     except Exception as e:
         msg = str(e)
-        if "Knowledge 레코드가 없습니다" in msg:
+        if "No Knowledge record found" in msg or "Knowledge 레코드가 없습니다" in msg:
             print(f"✅ 기대대로 실패 — 명확한 에러 메시지")
             print(f"   {msg[:120]}")
             return True

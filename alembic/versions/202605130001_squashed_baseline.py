@@ -38,10 +38,9 @@ def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     # ── Enum 타입 ─────────────────────────────────────────────
-    sourcetype = sa.Enum("YOUTUBE", "INSTAGRAM", "FILE", name="sourcetype")
-    processstatus = sa.Enum("PENDING", "COMPLETED", "FAILED", name="processstatus")
-    sourcetype.create(op.get_bind(), checkfirst=True)
-    processstatus.create(op.get_bind(), checkfirst=True)
+    # enum(sourcetype/processstatus)은 아래 knowledge 테이블의 컬럼에서만 쓰이므로
+    # create_table이 1회 생성하게 둔다(여기서 명시 선생성하면 create_table이 재생성 →
+    # "type already exists"로 clean `alembic upgrade head` 실패).
 
     # ── 1. category ───────────────────────────────────────────
     op.create_table(

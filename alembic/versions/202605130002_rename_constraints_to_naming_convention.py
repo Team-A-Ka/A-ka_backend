@@ -24,13 +24,38 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _rename_constraint_if_exists(table_sql: str, regclass_sql: str, old: str, new: str) -> None:
+    """레거시 DB(옛 자동생성 제약명)에서만 rename한다.
+    squashed_baseline(202605130001)로 만든 새 DB는 이미 convention 이름이라
+    old 제약이 없으므로 no-op → clean `alembic upgrade head`가 통과한다."""
+    op.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = '{old}' AND conrelid = '{regclass_sql}'::regclass
+            ) THEN
+                ALTER TABLE {table_sql} RENAME CONSTRAINT {old} TO {new};
+            END IF;
+        END $$;
+        """
+    )
+
+
 def upgrade() -> None:
-    op.execute("ALTER TABLE category RENAME CONSTRAINT category_name_key TO uq_category_name")
-    op.execute("ALTER TABLE \"user\" RENAME CONSTRAINT user_user_name_key TO uq_user_user_name")
-    op.execute("ALTER TABLE youtube_metadata RENAME CONSTRAINT youtube_metadata_knowledge_id_key TO uq_youtube_metadata_knowledge_id")
+    _rename_constraint_if_exists("category", "category", "category_name_key", "uq_category_name")
+    _rename_constraint_if_exists('"user"', '"user"', "user_user_name_key", "uq_user_user_name")
+    _rename_constraint_if_exists(
+        "youtube_metadata", "youtube_metadata",
+        "youtube_metadata_knowledge_id_key", "uq_youtube_metadata_knowledge_id",
+    )
 
 
 def downgrade() -> None:
-    op.execute("ALTER TABLE youtube_metadata RENAME CONSTRAINT uq_youtube_metadata_knowledge_id TO youtube_metadata_knowledge_id_key")
-    op.execute("ALTER TABLE \"user\" RENAME CONSTRAINT uq_user_user_name TO user_user_name_key")
-    op.execute("ALTER TABLE category RENAME CONSTRAINT uq_category_name TO category_name_key")
+    _rename_constraint_if_exists(
+        "youtube_metadata", "youtube_metadata",
+        "uq_youtube_metadata_knowledge_id", "youtube_metadata_knowledge_id_key",
+    )
+    _rename_constraint_if_exists('"user"', '"user"', "uq_user_user_name", "user_user_name_key")
+    _rename_constraint_if_exists("category", "category", "uq_category_name", "category_name_key")
