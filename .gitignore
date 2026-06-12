@@ -392,3 +392,6 @@ tests/
 portfolio/_combined.html
 portfolio/logs/
 portfolio/backups/
+# 취업용 개인 문서 (이력서·자소서·내부 인계문서 등 — 공개 레포에서 제외)
+portfolio/
+.env.bak
