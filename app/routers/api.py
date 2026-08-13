@@ -5,6 +5,10 @@ from app.routers.endpoints import notion
 from app.routers.endpoints import webhook
 from app.routers.endpoints import youtube_transcript
 
+# [디버그용] LangGraph 시각화 라우터 포함
+from app.routers.endpoints import debug_graph
+
+
 api_router = APIRouter()
 
 api_router.include_router(auth.router, tags=["auth"])
@@ -14,8 +18,5 @@ api_router.include_router(notion.router, prefix="/notion", tags=["notion"])
 api_router.include_router(
     youtube_transcript.router, prefix="/youtube", tags=["youtube"]
 )
-
-# [디버그용] LangGraph 시각화 라우터 포함
-from app.routers.endpoints import debug_graph
 
 api_router.include_router(debug_graph.router, prefix="/debug/graph", tags=["debug"])

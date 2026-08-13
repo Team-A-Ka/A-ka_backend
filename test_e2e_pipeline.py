@@ -12,7 +12,6 @@ import json
 import sys
 import time
 import urllib.request
-import uuid
 
 # Windows cp949 인코딩 문제 방지
 if hasattr(sys.stdout, "buffer"):
@@ -160,7 +159,7 @@ def run_e2e_tests():
 
     res, latency = send_webhook(utterance_search)
     print(f"✅ 웹훅 응답 수신 (지연시간: {latency:.4f}초)")
-    print(f"   (카카오 5초 규약: 즉시 OK 반환 — AI 답변은 Celery 워커에서 비동기 처리)")
+    print("   (카카오 5초 규약: 즉시 OK 반환 — AI 답변은 Celery 워커에서 비동기 처리)")
 
     # SEARCH Celery 처리 대기 (데이터가 확실히 적재된 후라 짧게)
     print("⏳ Celery SEARCH 처리 대기 중 (최대 10초)...", end="", flush=True)

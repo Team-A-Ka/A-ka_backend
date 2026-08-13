@@ -1,4 +1,3 @@
-import sys
 import logging
 from app.tasks.router_tasks import process_ai_routing_task
 

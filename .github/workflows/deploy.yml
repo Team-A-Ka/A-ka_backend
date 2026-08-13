@@ -1,14 +1,50 @@
-name: Deploy to EC2
 
+Deploy · YML
+name: CI then Deploy to EC2
+ 
 on:
   push:
     branches:
       - main
-
+  pull_request:
+    branches:
+      - main
+ 
 jobs:
-  deploy:
+  # --- CI: 서로 독립적인 두 개 job이라 병렬로 실행됨 ---
+  lint-python:
     runs-on: ubuntu-latest
-
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+ 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+ 
+      - name: Install ruff
+        run: pip install ruff
+ 
+      - name: Run ruff (lint)
+        run: ruff check .
+ 
+  lint-dockerfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+ 
+      - name: Run hadolint on Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+ 
+  # --- CD: main에 push됐을 때만, 위 두 job이 모두 성공해야 실행됨 ---
+  deploy:
+    needs: [lint-python, lint-dockerfile]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
     steps:
       - name: Deploy with SSH
         uses: appleboy/ssh-action@v1.0.3

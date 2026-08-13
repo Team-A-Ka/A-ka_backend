@@ -38,11 +38,10 @@ TEST_USER_ID = 17
 ===========================================================
 """
 
-import re
-import sys
-from sqlalchemy import create_engine, text
-from app.core.config import settings
-from app.services.search_service import find_similar_videos, openai_client
+import re  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
+from app.core.config import settings  # noqa: E402
+from app.services.search_service import find_similar_videos, openai_client  # noqa: E402
 
 engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
 
@@ -129,12 +128,16 @@ def run_test():
     # 1. 유저 현황 출력
     users = get_users_with_embeddings()
     if not users:
-        print("[FAIL] 임베딩이 있는 영상 데이터가 없습니다. UPLOAD 파이프라인 먼저 실행하세요.")
+        print(
+            "[FAIL] 임베딩이 있는 영상 데이터가 없습니다. UPLOAD 파이프라인 먼저 실행하세요."
+        )
         return
 
     print("[DB 현황] 임베딩 보유 유저:")
     for u in users:
-        print(f"  user_id={u['user_id']} | 영상 {u['video_count']}개 | 청크 {u['chunk_count']}개")
+        print(
+            f"  user_id={u['user_id']} | 영상 {u['video_count']}개 | 청크 {u['chunk_count']}개"
+        )
 
     # 2. user_id 결정
     user_id = TEST_USER_ID
@@ -151,7 +154,7 @@ def run_test():
 
     print(f"\n[보유 영상 목록] ({len(knowledge_list)}개):")
     for i, k in enumerate(knowledge_list):
-        print(f"  [{i+1}] {k['title']} (청크 {k['chunk_count']}개)")
+        print(f"  [{i + 1}] {k['title']} (청크 {k['chunk_count']}개)")
 
     # 4. 모드 결정: URL 기준 or 자연어 기준
     query_video_id = extract_video_id(TEST_QUERY_URL)
@@ -174,13 +177,13 @@ def run_test():
             ).fetchone()
 
         if not row:
-            print(f"\n[FAIL] TEST_QUERY_URL의 영상이 DB에 없거나 summary가 없습니다.")
-            print(f"       먼저 해당 영상을 UPLOAD 파이프라인으로 처리해주세요.")
+            print("\n[FAIL] TEST_QUERY_URL의 영상이 DB에 없거나 summary가 없습니다.")
+            print("       먼저 해당 영상을 UPLOAD 파이프라인으로 처리해주세요.")
             return
 
         search_query = row[2]
         current_knowledge_id = str(row[0])  # 자기 자신 자동 제외
-        print(f"\n[모드 A] URL 기준 검색")
+        print("\n[모드 A] URL 기준 검색")
         print(f"  기준 영상: {row[1]}")
         print(f"  summary 길이: {len(search_query)}자 (자동 추출)")
     else:
@@ -194,12 +197,16 @@ def run_test():
             if exclude_knowledge_id:
                 print(f"\n[제외 영상]: {TEST_EXCLUDE_URL}")
             else:
-                print(f"\n[WARN] 제외 영상이 DB에 없습니다. 전체 대상 검색합니다.")
+                print("\n[WARN] 제외 영상이 DB에 없습니다. 전체 대상 검색합니다.")
 
-        current_knowledge_id = exclude_knowledge_id or "00000000-0000-0000-0000-000000000000"
-        print(f"\n[모드 B] 자연어 기준 검색")
+        current_knowledge_id = (
+            exclude_knowledge_id or "00000000-0000-0000-0000-000000000000"
+        )
+        print("\n[모드 B] 자연어 기준 검색")
 
-    print(f"\n[검색 쿼리]: \"{search_query[:80]}{'...' if len(search_query) > 80 else ''}\"")
+    print(
+        f'\n[검색 쿼리]: "{search_query[:80]}{"..." if len(search_query) > 80 else ""}"'
+    )
 
     # 6. 실제 distance 먼저 확인 (threshold 없이 전체 조회)
     print("\n[*] 전체 영상 distance 확인 중 (threshold 없음)...\n")

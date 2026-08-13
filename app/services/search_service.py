@@ -13,7 +13,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import uuid
 
 from langchain_core.runnables import RunnableConfig
-from openai import OpenAI
 from langgraph.graph import StateGraph, START, END
 from sqlalchemy import text
 

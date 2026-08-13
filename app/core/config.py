@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     LLM_TIMEOUT: int = 30
     LLM_PRIMARY_PROVIDER: str = "openai"
     LLM_FALLBACKS: str = "gemini,anthropic"
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     ANTHROPIC_MODEL: str = "claude-3-5-haiku-latest"
     GOOGLE_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
