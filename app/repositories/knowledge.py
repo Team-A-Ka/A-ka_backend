@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, UTC
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,8 +51,8 @@ class KnowledgeRepository:
                 status="PENDING",
                 category_id=None,
                 hit_count=1,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
 
             youtube_metadata = YoutubeMetadata(
@@ -96,7 +96,7 @@ class KnowledgeRepository:
 
     async def increase_hit_count(self, knowledge: Knowledge):
         knowledge.hit_count = (knowledge.hit_count or 0) + 1
-        knowledge.updated_at = datetime.utcnow()
+        knowledge.updated_at = datetime.now(UTC)
 
         self.session.add(knowledge)
 
@@ -217,7 +217,7 @@ async def update_summary_result_to_db(
             knowledge.summary = summary or ""
             knowledge.category_id = category.id
             knowledge.status = ProcessStatus.COMPLETED
-            knowledge.updated_at = datetime.utcnow()
+            knowledge.updated_at = datetime.now(UTC)
 
             await session.commit()
             return {
@@ -317,8 +317,8 @@ async def save_link_only(
                 source_type=SourceType.YOUTUBE,
                 status=ProcessStatus.COMPLETED,
                 category_id=category.id,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
             )
 
             youtube_meta = YoutubeMetadata(
